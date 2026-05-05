@@ -3,13 +3,13 @@ data/raw/
 data/processed/
 
 # ML artifacts
-artifacts/models/
-artifacts/reports/
-artifacts/schemas/
+artifacts/
+mlruns_registry/
 
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 venv/
 
