@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 .venv/
+venv/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
@@ -19,11 +20,16 @@ htmlcov/
 uv.lock.bak
 
 # ML artefacts — download via make data / make train
+artifacts/
 artifacts/models/
 artifacts/data/raw/
 artifacts/data/processed/
 mlruns/
+mlruns_registry/
 mlflow.db
+
+# Reference materials (not part of the project)
+resources/
 
 # Editors
 .vscode/
