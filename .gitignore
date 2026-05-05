@@ -42,4 +42,7 @@ resources/
 
 # OS
 .DS_Store
-Thumbs.dbdata/
+Thumbs.db
+
+# Local data
+data/
