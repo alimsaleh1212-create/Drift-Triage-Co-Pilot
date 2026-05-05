@@ -1,0 +1,17 @@
+# Data
+data/raw/
+data/processed/
+
+# ML artifacts
+artifacts/models/
+artifacts/reports/
+artifacts/schemas/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
