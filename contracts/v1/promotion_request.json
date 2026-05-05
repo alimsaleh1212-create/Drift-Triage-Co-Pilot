@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromotionRequest",
+  "description": "v1 contract: agent/worker → model service to promote a version to Production",
+  "type": "object",
+  "required": [
+    "model_name",
+    "target_version",
+    "investigation_id",
+    "hil_approval_id"
+  ],
+  "properties": {
+    "model_name": { "type": "string", "minLength": 1 },
+    "target_version": { "type": "integer", "minimum": 1 },
+    "investigation_id": { "type": "string", "minLength": 1 },
+    "hil_approval_id": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

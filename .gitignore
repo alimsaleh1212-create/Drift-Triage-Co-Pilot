@@ -1,17 +1,45 @@
-# Data
-data/raw/
-data/processed/
-
-# ML artifacts
-artifacts/
-mlruns_registry/
+# Secrets — never commit
+.env
 
 # Python
 __pycache__/
-*.pyc
-.pytest_cache/
+*.py[cod]
+*.pyo
 .venv/
 venv/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+.pytest_cache/
 
-# Environment
-.env
+# uv
+uv.lock.bak
+
+# ML artefacts — download via make data / make train
+artifacts/
+artifacts/models/
+artifacts/data/raw/
+artifacts/data/processed/
+mlruns/
+mlruns_registry/
+mlflow.db
+
+# Reference materials (not part of the project)
+resources/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.tar
+
+# OS
+.DS_Store
+Thumbs.db
