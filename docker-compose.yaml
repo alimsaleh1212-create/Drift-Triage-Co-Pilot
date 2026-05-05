@@ -1,21 +1,18 @@
 # docker-compose.yaml — Drift Triage Co-Pilot full stack
 #
 # Services:
-#   postgres  — Postgres 16 + pgvector; init script creates all tables.
-#   redis     — Redis 7 for arq queue and dedup keys.
-#   vault     — HashiCorp Vault (dev mode).
-#   vault-init — One-shot; creates AppRole and prints credentials.
-#   mlflow    — MLflow tracking server (Postgres backend).
-#   service   — FastAPI model service (predict, drift, promotion).
-#   agent     — FastAPI agent service (webhook, HIL, investigations).
-#   worker    — arq async worker (replay_test, retrain, rollback).
-#   dashboard — Streamlit dashboard.
+#   postgres    — Postgres 16 + pgvector; init script creates extensions and tables.
+#   redis       — Redis 7 for arq queue and dedup keys.
+#   mlflow      — MLflow tracking server (Postgres backend, local artifact store).
+#   service     — FastAPI model service (predict, drift, promotion).
+#   agent       — FastAPI agent service (webhook, HIL, investigations).
+#   worker      — arq async worker (replay_test, retrain, rollback).
+#   dashboard   — Streamlit dashboard.
+#   pgadmin     — Optional pgAdmin 4 for database inspection.
 #
 # Quick start:
 #   cp .env.example .env
-#   docker compose up -d postgres redis vault
-#   docker compose logs vault-init   # grab VAULT_ROLE_ID / VAULT_SECRET_ID
-#   # Edit .env: fill VAULT_ROLE_ID and VAULT_SECRET_ID
+#   # Edit .env — fill in REQUIRED secrets (GOOGLE_API_KEY, POSTGRES_PASSWORD, etc.)
 #   make train                       # register model, write artifacts/
 #   docker compose up -d
 
@@ -27,9 +24,9 @@ services:
     container_name: dt_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: drift_triage
+      POSTGRES_USER: ${POSTGRES_USER:-drift_triage}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: drift_triage
+      POSTGRES_DB: ${POSTGRES_DB:-drift_triage}
     ports:
       - "5432:5432"
     networks:
@@ -38,7 +35,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init-pgvector.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U drift_triage -d drift_triage"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-drift_triage} -d ${POSTGRES_DB:-drift_triage}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -60,57 +57,13 @@ services:
       timeout: 3s
       retries: 5
 
-  # ─── HashiCorp Vault (dev mode) ───────────────────────────────────────────
-  vault:
-    image: hashicorp/vault:1.18
-    container_name: dt_vault
-    restart: unless-stopped
-    cap_add:
-      - IPC_LOCK
-    environment:
-      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
-      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
-    ports:
-      - "8200:8200"
-    networks:
-      - dt_network
-    volumes:
-      - vault_data:/vault/data
-    healthcheck:
-      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
-
-  # ─── Vault initialiser (one-shot) ─────────────────────────────────────────
-  vault-init:
-    image: hashicorp/vault:1.18
-    container_name: dt_vault_init
-    restart: "no"
-    env_file: .env
-    environment:
-      VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: dev-root-token
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-changeme}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      PROMOTION_API_KEY: ${PROMOTION_API_KEY:-changeme_changeme_ch}
-    networks:
-      - dt_network
-    depends_on:
-      vault:
-        condition: service_healthy
-    volumes:
-      - ./infra/vault/seed-secrets.sh:/seed-secrets.sh:ro
-    entrypoint: ["sh", "/seed-secrets.sh"]
-
   # ─── MLflow tracking server ────────────────────────────────────────────────
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.21.3
     container_name: dt_mlflow
     restart: unless-stopped
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://drift_triage:${POSTGRES_PASSWORD:-changeme}@postgres:5432/drift_triage
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-drift_triage}
       MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
     ports:
       - "5000:5000"
@@ -123,7 +76,7 @@ services:
         condition: service_healthy
     command: >
       mlflow server
-      --backend-store-uri postgresql://drift_triage:${POSTGRES_PASSWORD:-changeme}@postgres:5432/drift_triage
+      --backend-store-uri postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-drift_triage}
       --default-artifact-root /mlflow/artifacts
       --host 0.0.0.0
       --port 5000
@@ -142,7 +95,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      VAULT_ADDR: http://vault:8200
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      SERVICE_URL: http://service:8000
       AGENT_URL: http://agent:8001
     ports:
       - "8000:8000"
@@ -153,10 +109,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      vault:
+      redis:
         condition: service_healthy
-      vault-init:
-        condition: service_completed_successfully
       mlflow:
         condition: service_healthy
     healthcheck:
@@ -174,7 +128,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      VAULT_ADDR: http://vault:8200
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379
+      MLFLOW_TRACKING_URI: http://mlflow:5000
       SERVICE_URL: http://service:8000
     ports:
       - "8001:8001"
@@ -185,10 +141,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      vault:
+      mlflow:
         condition: service_healthy
-      vault-init:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
       interval: 10s
@@ -204,7 +158,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      VAULT_ADDR: http://vault:8200
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379
+      MLFLOW_TRACKING_URI: http://mlflow:5000
       SERVICE_URL: http://service:8000
     networks:
       - dt_network
@@ -213,10 +169,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      vault:
+      postgres:
         condition: service_healthy
-      vault-init:
-        condition: service_completed_successfully
 
   # ─── Streamlit dashboard ──────────────────────────────────────────────────
   dashboard:
@@ -237,6 +191,24 @@ services:
       agent:
         condition: service_healthy
 
+  # ─── pgAdmin 4 (optional, development convenience) ────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:8.13
+    container_name: dt_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@drift-triage.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-changeme}
+    ports:
+      - "8888:80"
+    networks:
+      - dt_network
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 networks:
   dt_network:
     driver: bridge
@@ -244,5 +216,5 @@ networks:
 volumes:
   postgres_data:
   redis_data:
-  vault_data:
   mlflow_data:
+  pgadmin_data:

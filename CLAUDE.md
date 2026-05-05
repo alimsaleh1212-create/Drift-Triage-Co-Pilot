@@ -201,57 +201,19 @@ never scattered. Document every TTL choice in the README.
 **Do not** `lru_cache` anything taking mutable args, anything that should
 expire, or any function whose cache key is not its inputs.
 
-### 9. Configuration — `pydantic-settings` + HashiCorp Vault, Not Magic Strings
+### 9. Configuration — `pydantic-settings`, Not Magic Strings
 
-One `Settings` class. Every value typed. **Secrets are loaded from HashiCorp
-Vault** — never from `.env` files or `os.environ` directly. Non-secret config
-(ports, model names, thresholds) may come from environment variables via
-`pydantic-settings`, but every secret (API keys, passwords, tokens) is fetched
-from Vault at startup and injected into `Settings`.
+One `Settings` class. Every value typed. Missing required values fail at
+startup. The rest of the codebase imports from `Settings` — never from
+`os.environ` directly.
 
-**Vault architecture:**
-
-- A Vault dev server runs as a Docker service in `docker-compose.yaml`
-  alongside postgres, redis, and the application services.
-- Secrets are stored in Vault's KV v2 secrets engine at paths like
-  `secret/data/drift-triage/google_api_key`,
-  `secret/data/drift-triage/postgres_password`, etc.
-- On startup, each service authenticates to Vault using a **Vault AppRole**
-  (role ID + secret ID). The AppRole credentials are the **only** secrets
-  that come from the environment — everything else is fetched from Vault.
-- The `Settings` class uses a custom settings source that reads from Vault
-  first and falls back to environment variables for non-secret config.
+Secrets come from `.env` (gitignored) in development. For production,
+migrate to HashiCorp Vault — see `DECISIONS.md`.
 
 ```python
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
-import hvac
-from hvac.api.auth_methods import AppRole
-
-
-class VaultSettingsSource:
-    """Custom Pydantic settings source that reads secrets from Vault."""
-
-    def __init__(self, settings_cls: type[BaseSettings]) -> None:
-        self.settings_cls = settings_cls
-
-    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
-        # Vault fields are marked with Field(..., json_schema_extra={"vault": True})
-        # Non-Vault fields fall through to env vars
-        return None, field_name, False
-
-    def __call__(self) -> dict[str, Any]:
-        client = hvac.Client(url=get_settings._vault_addr)
-        client.auth.approle.login(
-            role_id=get_settings._vault_role_id,
-            secret_id=get_settings._vault_secret_id,
-        )
-        secret_data = client.secrets.kv.v1.read_secret(
-            path="drift-triage",
-            mount_point="secret",
-        )
-        return secret_data["data"]
 
 
 class Settings(BaseSettings):
@@ -261,12 +223,7 @@ class Settings(BaseSettings):
         extra="forbid",
     )
 
-    # Vault connection — only secrets that come from the environment
-    vault_addr: str = Field("http://vault:8200", alias="VAULT_ADDR")
-    vault_role_id: str = Field(..., alias="VAULT_ROLE_ID")
-    vault_secret_id: str = Field(..., alias="VAULT_SECRET_ID")
-
-    # Secrets — loaded from Vault at startup
+    # Secrets (from .env — gitignored)
     google_api_key: str = Field(..., min_length=1)
     postgres_password: str = Field(..., min_length=1)
     promotion_api_key: str = Field(..., min_length=16)
@@ -276,6 +233,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_user: str = "drift_triage"
     postgres_db: str = "drift_triage"
+
     redis_url: str = "redis://redis:6379"
     mlflow_tracking_uri: str = "http://mlflow:5000"
 
@@ -287,14 +245,17 @@ class Settings(BaseSettings):
     test_size: float = 0.2
     val_size: float = 0.2
     min_recall: float = 0.75
-    drift_psi_threshold: float = 0.25
+    drift_psi_warn: float = 0.1
+    drift_psi_high: float = 0.25
     drift_chi2_alpha: float = 0.05
     drift_window_size: int = 500
 
     redis_queue_name: str = "drift_actions"
     redis_max_retries: int = 3
-    redis_retry_delay_min: float = 1.0
-    redis_retry_delay_max: float = 10.0
+    redis_retry_delay_base: float = 1.0
+
+    service_url: str = "http://service:8000"
+    agent_url: str = "http://agent:8001"
 
     @property
     def async_database_url(self) -> str:
@@ -309,80 +270,18 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-**Vault rules:**
+**`extra="forbid"` is mandatory.** A typo in `.env` must crash at startup,
+not silently leave a `None` for two weeks.
 
-- **`extra="forbid"` is mandatory.** A typo in `.env` or a missing Vault key
-  must crash at startup, not silently leave a `None` for two weeks.
-- **Only `VAULT_ADDR`, `VAULT_ROLE_ID`, and `VAULT_SECRET_ID` are set in the
-  environment.** Everything else (API keys, passwords, tokens) is fetched from
-  Vault. The `.env` file contains only these three AppRole credentials.
-- **Vault policies are least-privilege.** The AppRole for the model service can
-  only read the secrets it needs. The agent service has its own AppRole with
-  its own policy. The worker gets yet another. No service reads secrets it
-  doesn't use.
-- **Vault is initialized and seeded in `docker-compose.yaml`.** A one-shot
-  init container (or entrypoint script) creates the KV secrets engine, writes
-  the initial secrets, creates AppRoles, and assigns policies. This is
-  idempotent — running it again is safe.
-- **`.env.example` contains only the three AppRole variables with fake
-  placeholder values.** No real secrets ever appear in `.env.example` or any
-  file committed to git.
-- **Development mode.** The Vault dev server (`vault server -dev`) runs in
-  memory with an in-memory seal. For local dev, `VAULT_ROLE_ID` and
-  `VAULT_SECRET_ID` can be set to the dev root token for convenience. The
-  `.env` file must still only contain these three variables.
-- **Vault unseal in dev.** The dev server is auto-unsealed. In production, you
-  would configure auto-unseal via a cloud KMS or Shamir key shares — but for
-  this project, dev mode is sufficient and the Docker Compose setup uses it.
+**`.env.example` contains every variable with placeholder values.** No real
+secrets ever appear in `.env.example` or any file committed to git. `.env`
+is in `.gitignore`.
 
-**Vault in `docker-compose.yaml`:**
+Tests construct `Settings(google_api_key="test", ...)` directly — no env
+variables required.
 
-```yaml
-vault:
-  image: hashicorp/vault:1.18
-  cap_add:
-    - IPC_LOCK
-  environment:
-    VAULT_DEV_ROOT_TOKEN_ID: "dev-root-token"
-    VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
-  ports:
-    - "8200:8200"
-  volumes:
-    - vault_data:/vault/data
-  healthcheck:
-    test: ["CMD", "vault", "status"]
-    interval: 5s
-    timeout: 3s
-    retries: 5
-
-vault-init:
-  image: hashicorp/vault:1.18
-  depends_on:
-    vault:
-      condition: service_healthy
-  entrypoint: >
-    /bin/sh -c "
-      vault secrets enable -address=http://vault:8200 kv &&
-      vault kv put -address=http://vault:8200 secret/drift-triage \
-        google_api_key=changeme \
-        postgres_password=changeme \
-        promotion_api_key=changeme_changeme_ch &&
-      vault auth enable -address=http://vault:8200 approle &&
-      vault policy write -address=http://vault:8200 drift-triage-policy - <<'EOF'
-      path \"secret/data/drift-triage\" {
-        capabilities = [\"read\"]
-      }
-      EOF
-      vault write -address=http://vault:8200 auth/approle/role/drift-triage \
-        token_policies=drift-triage-policy \
-        secret_id_ttl=24h &&
-      vault read -address=http://vault:8200 auth/approle/role/drift-triage/role-id &&
-      vault write -address=http://vault:8200 -f auth/approle/role/drift-triage/secret-id
-    "
-```
-
-Tests construct `Settings(google_api_key="test", ...)` directly — no Vault
-connection required in test environments.
+**Production note:** For production deployment, migrate secrets to
+HashiCorp Vault. See `DECISIONS.md` for the migration path.
 
 ### 10. Type Hints, Pydantic, and the Boundary
 
@@ -588,23 +487,22 @@ update the JSON and explain in the PR description.
 This project uses **Google Gemini** as the primary LLM, falling back to
 **Ollama** (local) if Gemini is unavailable.
 
-- Primary client: `google-generativeai` Python SDK (Gemini `gemini-2.5-flash`).
-- Fallback client: `ollama` or `httpx` to local Ollama service (e.g. `llama3`).
-- Auth: `GOOGLE_API_KEY` fetched from Vault via `Settings` (only AppRole
-  credentials come from the environment).
-- **Two tiers (primary):**
-  - `cheap = gemini-2.5-flash` — triage analysis, tool-arg generation.
-  - `strong = gemini-2.5-pro` — final action decision only (when it matters).
-- **Two tiers (fallback):**
-  - `cheap = ollama_model` — replaces gemini-2.5-flash when unavailable.
-  - The fallback is automatic: on `httpx.TimeoutException` or 5xx from Gemini,
-    retry once, then fall back to Ollama.
+- Primary client: `google-generativeai` Python SDK (Gemini, configured via
+  `GEMINI_MODEL` setting, default `gemini-2.5-flash`).
+- Fallback client: `httpx` to local Ollama service (configured via
+  `OLLAMA_MODEL` setting, default `llama3`).
+- Auth: `GOOGLE_API_KEY` from `.env` via `Settings`.
+- **Single model.** One Gemini model for all calls — triage, action, comms.
+  No cheap/strong split. If a more capable model is needed, change
+  `GEMINI_MODEL` in `.env`.
+- The fallback is automatic: on any exception from Gemini (timeout, network
+  error, 5xx), fall back to Ollama.
 - Use `response_mime_type="application/json"` with `response_schema=PydanticModel`
   for structured extraction. **Never** parse free-form LLM text with regex or
   string splitting.
 - **Separate prompt layers.** System prompt = role + format + invariants
   (static); user prompt = the varying data only.
-- Cache both primary and fallback clients with `@lru_cache(maxsize=1)`.
+- Cache the Gemini client with `@lru_cache(maxsize=1)`.
 - Every call has `max_output_tokens`, `timeout`, and tenacity retries on
   transient errors.
 - Log which provider served each call for observability.
@@ -613,14 +511,16 @@ This project uses **Google Gemini** as the primary LLM, falling back to
 **Fallback pattern:**
 
 ```python
-async def call_llm(prompt: str, *, prefer_strong: bool = False) -> str:
-    client = get_strong_client() if prefer_strong else get_cheap_client()
+async def call_llm(prompt: str, schema: type[M]) -> M:
     try:
-        return await _call_gemini(client, prompt)
-    except (httpx.TimeoutException, httpx.NetworkError, GeminiAPIError) as e:
-        log.warning("llm.fallback", provider="gemini", error=str(e))
-        fallback_client = get_fallback_client()
-        return await _call_ollama(fallback_client, prompt)
+        result = await _call_gemini(prompt, schema)
+        log.info("llm.call", provider="gemini", schema=schema.__name__)
+        return result
+    except Exception as exc:
+        log.warning("llm.fallback", provider="gemini", error=str(exc))
+        result = await _call_ollama(prompt, schema)
+        log.info("llm.call", provider="ollama", schema=schema.__name__)
+        return result
 ```
 
 ### 15. LLM Input Security — Prompt Injection Prevention
@@ -710,7 +610,7 @@ format + invariants (static); user prompt = the varying data only.
 | Wakeup and the model URI it was investigating no longer exists?                                 | Reconcile step detects missing version, marks investigation `aborted_stale`, posts a comms summary, exits cleanly. No retry on a missing artifact.                                | `agent/reconcile.py`, `agent/graph.py` (entry guard)              |
 | Two retries of the same retrain — guarantee one training?                                       | Idempotency key `retrain:{investigation_id}`; worker `SETNX` on `dispatch:{key}` with TTL = max-job-runtime + buffer; second dispatch is a no-op.                                  | `worker/dedup.py`, `worker/main.py`                                |
 | Stale HIL approval (newer drift event arrived)?                                                 | Before executing approved action, agent checks `investigation.drift_report_id == latest_drift_report_id`. If false, action aborts and dashboard surfaces a warning.                | `agent/staleness.py`, `agent/graph.py` (post-approval guard)       |
-| Can the promotion endpoint be called without going through the agent — and should it?           | Technically yes (it's HTTP); practically no — it requires `X-Promotion-Key` which only the worker reads from Vault, and the gate requires a recorded HIL approval row. **Should not.** Documented in `DECISIONS.md`. | `service/routers/promotion.py`, `DECISIONS.md`                     |
+| Can the promotion endpoint be called without going through the agent — and should it?           | Technically yes (it's HTTP); practically no — it requires `X-Promotion-Key` which only the worker reads from Settings (.env), and the gate requires a recorded HIL approval row. **Should not.** Documented in `DECISIONS.md`. | `service/routers/promotion.py`, `DECISIONS.md`                     |
 
 If you change one of these answers, update the table.
 
@@ -976,24 +876,19 @@ counters (`i`, `j`) and lambdas.
 ### 27. Security — CRITICAL
 
 - **Never** hardcode keys, tokens, passwords, or connection strings.
-- All secrets flow through `Settings` (one place) loaded from HashiCorp Vault.
-  No `os.getenv(...)` scattered across files — only `VAULT_ADDR`,
-  `VAULT_ROLE_ID`, and `VAULT_SECRET_ID` come from the environment.
-- `.env` is in `.gitignore`. Commit `.env.example` with **only the three
-  AppRole variables** (`VAULT_ADDR`, `VAULT_ROLE_ID`, `VAULT_SECRET_ID`) and
-  fake placeholder values. No real secrets ever appear in `.env.example`
-  or any file committed to git.
+- All secrets flow through `Settings` (one place). No `os.getenv(...)`
+  scattered across files.
+- `.env` is in `.gitignore`. Commit `.env.example` with every required key
+  and **fake placeholder values only**.
 - If a secret is ever committed, **rotate it immediately**. Removing the
   commit from history is not enough — it persists in forks, clones, and CI
   logs.
-- Required Vault secrets: `google_api_key`, `postgres_password`,
-  `promotion_api_key`. Required env vars (AppRole only): `VAULT_ADDR`,
-  `VAULT_ROLE_ID`, `VAULT_SECRET_ID`.
-- The promotion endpoint is protected by an internal API key that only the
-  agent worker knows — this key is stored in Vault.
+- Required secrets: `GOOGLE_API_KEY`, `POSTGRES_PASSWORD`, `PROMOTION_API_KEY`.
+  These live in `.env` (gitignored). For production, migrate to HashiCorp
+  Vault — see `DECISIONS.md`.
+- The promotion endpoint is protected by an internal API key (`PROMOTION_API_KEY`)
+  that only the agent worker knows.
 - Validate all user input at API boundaries with Pydantic.
-- Vault policies are least-privilege: each service AppRole reads only the
-  secrets it needs.
 
 ### 28. Documentation (Google Style)
 
@@ -1082,27 +977,20 @@ Checklist (style, self-review, tests, docs, no secrets, no lint errors).
 
 - **One service, one container, one Dockerfile.** Model service, agent, worker,
   and dashboard are separate images.
-- `docker-compose.yaml` orchestrates the whole stack: postgres, redis, vault,
-  vault-init, mlflow, model-service, agent, worker, dashboard. All come up with
-  `docker-compose up`.
-- Services reference each other by service name (`http://model-service:8000`,
-  `http://agent:8001`, `redis://redis:6379`, `http://vault:8200`) — never
-  hardcoded IPs.
-- Named volumes for `postgres_data`, `redis_data`, `vault_data`, and
-  `mlflow_data` — all survive restarts so the demo doesn't retrain on every
-  `up`.
-- Healthchecks on postgres, redis, vault, model-service, agent.
+- `docker-compose.yaml` orchestrates the whole stack: postgres, redis, mlflow,
+  model-service, agent, worker, dashboard. All come up with `docker-compose up`.
+- Services reference each other by service name (`http://service:8000`,
+  `http://agent:8001`, `redis://redis:6379`) — never hardcoded IPs.
+- Named volumes for `postgres_data`, `redis_data`, and `mlflow_data` — all
+  survive restarts so the demo doesn't retrain on every `up`.
+- Healthchecks on postgres, redis, model-service, agent.
   `depends_on: condition: service_healthy` so no service starts before its
   dependencies are ready.
 - Multi-stage Dockerfiles, slim base images, non-root user.
 - **The full stack comes up with `docker-compose up` from a clean clone after
-  `cp .env.example .env` and filling in the three Vault AppRole credentials.**
-- **`resources/docker-compose.yaml` is a stale template** referencing a
-  different project (service names `stp_*` from "Smart Travel Planner"). Use
-  its Vault dev-mode + AppRole + healthcheck structure as scaffolding, but
-  rewrite the file with `drift_triage_*` names and add the Drift Triage
-  services (model-service, agent, worker, dashboard, mlflow). Do not copy it
-  verbatim.
+  `cp .env.example .env` and filling in the required secrets.**
+- Secrets come from `.env` (gitignored). For production, migrate to
+  HashiCorp Vault — see `DECISIONS.md`.
 
 ### 33. Testing Requirements
 
@@ -1141,13 +1029,11 @@ whole project without asking a single question.
 2. Architecture overview (with a diagram) — model service, agent, worker,
    dashboard, Redis, Postgres, MLflow.
 3. Prerequisites — Docker, `uv`.
-4. Setup — clone, `cp .env.example .env`, fill in the three Vault AppRole
-   credentials (`VAULT_ADDR`, `VAULT_ROLE_ID`, `VAULT_SECRET_ID`).
+4. Setup — clone, `cp .env.example .env`, fill in the required secrets
+   (`GOOGLE_API_KEY`, `POSTGRES_PASSWORD`, `PROMOTION_API_KEY`).
 5. How to run — `docker compose up` must be one of the commands.
 6. Environment variables — every variable, purpose, required/optional.
-   Explain that only `VAULT_ADDR`, `VAULT_ROLE_ID`, and `VAULT_SECRET_ID`
-   come from the environment; all other secrets are fetched from Vault at
-   startup.
+   All secrets come from `.env` via `Settings`; `.env` is gitignored.
 7. **ML narrative:**
    - Feature justifications (why `duration` was dropped, why `pdays==999` is a
      sentinel, why `unknown` is kept as a category).
@@ -1182,10 +1068,10 @@ screenshots, or a full API reference (link to `/docs`).
 Stage gates — do not advance if the gate is red.
 
 **Day 1 (Mon) — Foundation + ML pipeline.**
-Repo init (uv, pre-commit, .env.example with only the three AppRole vars,
+Repo init (uv, pre-commit, .env.example with required secrets,
 .gitignore, .dockerignore). `docker-compose.yaml` for postgres + redis +
-vault + vault-init + mlflow with healthchecks. `Settings` class with the
-Vault source. ML training pipeline (`ml/data.py`, `ml/pipeline.py`,
+mlflow with healthchecks. `Settings` class with pydantic-settings.
+ML training pipeline (`ml/data.py`, `ml/pipeline.py`,
 `ml/train.py`, `ml/threshold.py`, `ml/register.py`, `ml/reference_stats.py`).
 **Gate:** `uv run python -m drift_triage.ml.train` registers a model in
 MLflow; `mlflow ui` shows it; reference-stats JSON saved under `artifacts/`.
@@ -1263,7 +1149,8 @@ README contains: ARCH.md, DECISIONS.md, RUNBOOK.md
 Tag command: `git tag -a v0.1.0-week5 -m "Week 5 submission" && git push --tags`.
 
 The repo must come up cleanly on a fresh clone after `cp .env.example .env`
-and filling the three Vault AppRole credentials. Test this on a different
+and filling the required secrets (`GOOGLE_API_KEY`, `POSTGRES_PASSWORD`,
+`PROMOTION_API_KEY`). Test this on a different
 machine (or a clean Docker volume set) before submitting. "It works on my
 laptop" is the failure mode this gate exists to prevent.
 
@@ -1302,7 +1189,7 @@ laptop" is the failure mode this gate exists to prevent.
 | Agent checkpoint store    | **Postgres** via `langgraph-checkpoint-postgres` | Specified in brief; survives restarts; queryable                  |
 | Model storage             | **MLflow** with Postgres backend store           | Persisted across restarts; full model registry; versioning         |
 | Streamlit refresh         | **Auto-poll every 5 seconds**                   | Demo requires seeing live updates                                 |
-| Secrets management        | **HashiCorp Vault** (AppRole auth)               | No secrets in `.env`; least-privilege policies; dev server in Docker |
+| Secrets management        | **`.env` + `pydantic-settings`** (Vault for production) | Simplicity for bootcamp; `extra="forbid"` catches typos; Vault migration path in `DECISIONS.md` |
 
 ---
 
@@ -1321,8 +1208,7 @@ you have work to do.
 - [ ] `lru_cache` on deterministic helpers; TTL cache on at least one external
       call where it makes sense; thundering-herd lock present where needed.
 - [ ] All config goes through `Settings`. No `os.getenv` outside it.
-      `extra="forbid"` is set. Secrets come from Vault; only AppRole
-      credentials come from the environment.
+      `extra="forbid"` is set. Secrets come from `.env`; `.env` is gitignored.
 - [ ] Every external boundary (HTTP req/resp, tool input/output, LLM
       structured output, webhook payload) has a Pydantic model.
 - [ ] Every external call has a timeout, tenacity retries with backoff
@@ -1350,7 +1236,7 @@ you have work to do.
       the last investigation, not a new one.
 - [ ] The contract between platform and agent is versioned in `contracts/v1/`.
 - [ ] `.env`, `.venv`, model artefacts, and large data files are in
-      `.gitignore`. No secrets in git. Secrets loaded from Vault via one
+      `.gitignore`. No secrets in git. Secrets loaded from `.env` via one
       `Settings` class.
 - [ ] Each service has its own Dockerfile; `docker compose up` runs the whole
       stack from a clean machine.

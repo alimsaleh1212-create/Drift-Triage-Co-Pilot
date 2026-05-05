@@ -24,10 +24,10 @@ make demo-drift             # shifts euribor3m +2σ in rolling-window table
 docker compose exec redis redis-cli lrange drift_actions:dlq 0 -1
 ```
 
-### Re-run vault-init (if AppRole expired)
+### Regen .env secrets (if rotated)
 ```bash
-docker compose run --rm vault-init
-# copy new VAULT_ROLE_ID / VAULT_SECRET_ID into .env
+# Edit .env directly — secrets are stored there, fetched by Settings at startup
+# After updating .env, restart services:
 docker compose restart service agent worker
 ```
 
@@ -63,8 +63,9 @@ docker compose restart service agent worker
 **Cause:** MLflow artifact storage (`mlflow_data` volume) was removed.
 **Fix:** `docker compose down -v && make train && docker compose up -d`. The `reconcile.py` guard detects this on agent wakeup and marks the investigation `aborted_stale`.
 
-### Vault sealed after restart (non-dev mode)
-**Cause:** Not applicable — this project uses Vault dev mode which is auto-unsealed. In production, configure auto-unseal via cloud KMS.
+### Secrets not loading
+**Cause:** `.env` file is missing or has typos. `Settings(extra="forbid")` crashes on unknown keys.
+**Fix:** Compare `.env` against `.env.example`. Ensure `GOOGLE_API_KEY`, `POSTGRES_PASSWORD`, and `PROMOTION_API_KEY` are set.
 
 ---
 
@@ -76,4 +77,3 @@ docker compose restart service agent worker
 | agent | `http://localhost:8001/health` |
 | mlflow | `http://localhost:5000/health` |
 | dashboard | `http://localhost:8501` |
-| vault | `http://localhost:8200/v1/sys/health` |

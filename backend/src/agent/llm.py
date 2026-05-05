@@ -1,9 +1,10 @@
 """LLM client factory: Gemini primary with Ollama fallback.
 
 Per CLAUDE.md §14:
-- gemini-2.5-flash for cheap calls (triage, tool-arg generation).
-- gemini-2.5-pro for strong calls (final action decision).
-- Ollama fallback on TimeoutException / NetworkError / 5xx.
+- Gemini (gemini-2.5-flash) is the primary LLM for all calls.
+- Ollama (local, e.g. llama3) is the fallback if Gemini is unavailable.
+- Fallback is automatic: on TimeoutException / NetworkError / 5xx from Gemini,
+  retry once, then fall back to Ollama.
 - @lru_cache(maxsize=1) per client.
 - max_output_tokens on every call.
 - Log which provider served each call.
@@ -11,7 +12,6 @@ Per CLAUDE.md §14:
 
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 from typing import Any, TypeVar
 
@@ -31,27 +31,16 @@ log = get_logger(__name__)
 
 M = TypeVar("M", bound=BaseModel)
 
-_GEMINI_CHEAP = "gemini-2.5-flash"
-_GEMINI_STRONG = "gemini-2.5-pro"
 _MAX_OUTPUT_TOKENS = 2048
 
 
 @lru_cache(maxsize=1)
-def _get_gemini_cheap() -> Any:
+def _get_gemini_client() -> Any:
     import google.generativeai as genai
 
     settings = get_settings()
     genai.configure(api_key=settings.google_api_key)
-    return genai.GenerativeModel(settings.gemini_model_cheap)
-
-
-@lru_cache(maxsize=1)
-def _get_gemini_strong() -> Any:
-    import google.generativeai as genai
-
-    settings = get_settings()
-    genai.configure(api_key=settings.google_api_key)
-    return genai.GenerativeModel(settings.gemini_model_strong)
+    return genai.GenerativeModel(settings.gemini_model)
 
 
 @retry(
@@ -60,10 +49,11 @@ def _get_gemini_strong() -> Any:
     retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError)),
     reraise=True,
 )
-async def _call_gemini(model: Any, prompt: str, schema: type[M]) -> M:
+async def _call_gemini(prompt: str, schema: type[M]) -> M:
     """Call Gemini with JSON response schema and return parsed Pydantic model."""
     import google.generativeai as genai
 
+    model = _get_gemini_client()
     response = await model.generate_content_async(
         prompt,
         generation_config=genai.GenerationConfig(
@@ -91,30 +81,22 @@ async def _call_ollama(prompt: str, schema: type[M]) -> M:
     return schema.model_validate_json(text)
 
 
-async def call_llm(
-    prompt: str,
-    schema: type[M],
-    *,
-    prefer_strong: bool = False,
-) -> M:
+async def call_llm(prompt: str, schema: type[M]) -> M:
     """Call LLM with structured JSON output, falling back to Ollama.
 
     Args:
         prompt: Full prompt string (system + user already concatenated).
         schema: Pydantic model class for response validation.
-        prefer_strong: Use gemini-2.5-pro instead of flash.
 
     Returns:
         Validated Pydantic model instance.
     """
-    model = _get_gemini_strong() if prefer_strong else _get_gemini_cheap()
-    provider = "gemini-strong" if prefer_strong else "gemini-cheap"
     try:
-        result = await _call_gemini(model, prompt, schema)
-        log.info("llm.call", provider=provider, schema=schema.__name__)
+        result = await _call_gemini(prompt, schema)
+        log.info("llm.call", provider="gemini", schema=schema.__name__)
         return result
     except Exception as exc:
-        log.warning("llm.fallback", provider=provider, error=str(exc))
+        log.warning("llm.fallback", provider="gemini", error=str(exc))
         result = await _call_ollama(prompt, schema)
         log.info("llm.call", provider="ollama", schema=schema.__name__)
         return result

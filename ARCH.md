@@ -48,10 +48,9 @@ agent (graph)         Postgres          agent API       Dashboard       worker
 ## Data Flow: Secrets
 
 ```
-.env (VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID)
-  └─▶ vault-init seeds: google_api_key, postgres_password, promotion_api_key
-        └─▶ service/agent/worker fetch at startup via hvac AppRole login
-              └─▶ Settings class (lru_cache) → injected via Depends()
+.env (GOOGLE_API_KEY, POSTGRES_PASSWORD, PROMOTION_API_KEY)
+  └─▶ Settings class (lru_cache) → injected via Depends()
+        └─▶ Services read secrets at startup; .env is gitignored
 ```
 
 ## Component Responsibilities
@@ -65,4 +64,3 @@ agent (graph)         Postgres          agent API       Dashboard       worker
 | `mlflow` | Model registry, run tracking, artifact storage | HTTP :5000 |
 | `postgres` | Predictions, investigations, HIL approvals, LangGraph checkpoints, MLflow metadata | TCP :5432 |
 | `redis` | arq job queue, dedup SETNX keys, DLQ list | TCP :6379 |
-| `vault` | Secrets KV, AppRole auth | HTTP :8200 |

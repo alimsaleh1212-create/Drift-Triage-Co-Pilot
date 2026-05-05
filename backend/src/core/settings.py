@@ -1,36 +1,22 @@
-"""Application settings loaded from HashiCorp Vault (secrets) and environment (AppRole creds)."""
+"""Application settings loaded from environment and .env file.
+
+For production, migrate secrets to HashiCorp Vault — see DECISIONS.md.
+"""
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
-from typing import Any
 
-import hvac
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-def _fetch_vault_secrets() -> dict[str, Any]:
-    """Authenticate to Vault with AppRole and return KV secrets dict."""
-    addr = os.environ.get("VAULT_ADDR", "http://vault:8200")
-    role_id = os.environ["VAULT_ROLE_ID"]
-    secret_id = os.environ["VAULT_SECRET_ID"]
-
-    client = hvac.Client(url=addr)
-    client.auth.approle.login(role_id=role_id, secret_id=secret_id)
-    response = client.secrets.kv.v1.read_secret(
-        path="drift-triage",
-        mount_point="secret",
-    )
-    return response["data"]  # type: ignore[return-value]
 
 
 class Settings(BaseSettings):
     """Typed application config.
 
-    Secrets come from Vault. Non-secret config comes from env vars or defaults.
-    Only VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID come from the environment.
+    Secrets come from .env (gitignored). Non-secret config has sensible
+    defaults for local development. extra="forbid" ensures typos crash
+    at startup rather than silently leaving None.
     """
 
     model_config = SettingsConfigDict(
@@ -39,31 +25,31 @@ class Settings(BaseSettings):
         extra="forbid",
     )
 
-    # Vault AppRole — only env vars allowed
-    vault_addr: str = Field("http://vault:8200", alias="VAULT_ADDR")
-    vault_role_id: str = Field(..., alias="VAULT_ROLE_ID")
-    vault_secret_id: str = Field(..., alias="VAULT_SECRET_ID")
-
-    # Secrets — injected at startup from Vault; not from env
+    # ── Secrets (from .env, gitignored) ──────────────────────────────
     google_api_key: str = Field(..., min_length=1)
     postgres_password: str = Field(..., min_length=1)
     promotion_api_key: str = Field(..., min_length=16)
 
-    # Non-secret config — safe from env or defaults
+    # ── Postgres ──────────────────────────────────────────────────────
     postgres_host: str = "postgres"
     postgres_port: int = 5432
     postgres_user: str = "drift_triage"
     postgres_db: str = "drift_triage"
 
+    # ── Redis ──────────────────────────────────────────────────────────
     redis_url: str = "redis://redis:6379"
+
+    # ── MLflow ─────────────────────────────────────────────────────────
     mlflow_tracking_uri: str = "http://mlflow:5000"
 
-    gemini_model_cheap: str = "gemini-2.5-flash"
-    gemini_model_strong: str = "gemini-2.5-pro"
+    # ── LLM — Primary: Gemini ─────────────────────────────────────────
+    gemini_model: str = "gemini-2.5-flash"
+
+    # ── LLM — Fallback: Ollama ────────────────────────────────────────
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "llama3"
 
-    # ML / drift
+    # ── ML / Drift thresholds ─────────────────────────────────────────
     random_state: int = 42
     test_size: float = 0.2
     val_size: float = 0.2
@@ -73,12 +59,12 @@ class Settings(BaseSettings):
     drift_chi2_alpha: float = 0.05
     drift_window_size: int = 500
 
-    # Queue
+    # ── Queue (arq) ────────────────────────────────────────────────────
     redis_queue_name: str = "drift_actions"
     redis_max_retries: int = 3
     redis_retry_delay_base: float = 1.0
 
-    # Services (internal)
+    # ── Internal service URLs ──────────────────────────────────────────
     service_url: str = "http://service:8000"
     agent_url: str = "http://agent:8001"
 
@@ -99,10 +85,5 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the singleton Settings instance, fetching Vault secrets once."""
-    vault_secrets = _fetch_vault_secrets()
-    return Settings(
-        google_api_key=vault_secrets["google_api_key"],
-        postgres_password=vault_secrets["postgres_password"],
-        promotion_api_key=vault_secrets["promotion_api_key"],
-    )
+    """Return the singleton Settings instance, reading from .env / env vars."""
+    return Settings()

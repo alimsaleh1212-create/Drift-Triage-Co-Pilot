@@ -47,7 +47,7 @@ Self-healing MLOps stack: a binary classifier trained on UCI Bank Marketing data
                             └─────────────────────────────────────────┘
 ```
 
-Secrets flow: `.env` (3 Vault AppRole vars only) → `vault-init` seeds → services fetch at startup.
+Secrets flow: `.env` (gitignored) → `Settings` class → injected via `Depends()`.
 
 ## Prerequisites
 
@@ -64,48 +64,36 @@ git clone <repo> && cd drift-triage-copilot
 cp .env.example .env
 
 # 2. Start infrastructure
-docker compose up -d postgres redis vault
+docker compose up -d postgres redis mlflow
 
-# 3. Grab Vault AppRole credentials from vault-init logs
-docker compose logs vault-init
-# → prints VAULT_ROLE_ID=... and VAULT_SECRET_ID=...
-
-# 4. Fill them in .env
-# VAULT_ROLE_ID=<from logs>
-# VAULT_SECRET_ID=<from logs>
-
-# 5. Install backend deps and download data
+# 3. Install backend deps and download data
 make install
 make data
 
-# 6. Train and register model
+# 4. Train and register model
 make train
 # Registers model in MLflow as Staging; promotes to Production if it passes the gate.
 
-# 7. Start all services
+# 5. Start all services
 docker compose up -d
 
-# 8. Open dashboard
+# 6. Open dashboard
 open http://localhost:8501
 ```
 
 ## Environment Variables
 
-Only these three come from the environment. All other secrets (API keys, passwords) are fetched from Vault at startup.
+All secrets come from `.env` (gitignored). Copy `.env.example` and fill in the required values.
 
 | Variable | Description | Required |
 |---|---|---|
-| `VAULT_ADDR` | Vault address (default: `http://localhost:8200`) | Yes |
-| `VAULT_ROLE_ID` | Vault AppRole role ID (from `vault-init` logs) | Yes |
-| `VAULT_SECRET_ID` | Vault AppRole secret ID (from `vault-init` logs) | Yes |
+| `GOOGLE_API_KEY` | Gemini API key (primary LLM) | Yes |
+| `POSTGRES_PASSWORD` | Postgres password | Yes |
+| `PROMOTION_API_KEY` | Internal key for `/promotion/promote` endpoint (min 16 chars) | Yes |
+| `GEMINI_MODEL` | Gemini model name (default: `gemini-2.5-flash`) | No |
+| `OLLAMA_MODEL` | Ollama fallback model (default: `llama3`) | No |
 
-Secrets stored in Vault at `secret/drift-triage`:
-
-| Secret | Description |
-|---|---|
-| `google_api_key` | Gemini API key (primary LLM) |
-| `postgres_password` | Postgres password |
-| `promotion_api_key` | Internal key for `/promotion/promote` endpoint |
+For the full list of optional config variables, see `.env.example`.
 
 ## ML Narrative
 
