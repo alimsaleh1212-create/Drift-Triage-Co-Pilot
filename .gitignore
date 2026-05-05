@@ -1,0 +1,39 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# uv
+uv.lock.bak
+
+# ML artefacts — download via make data / make train
+artifacts/models/
+artifacts/data/raw/
+artifacts/data/processed/
+mlruns/
+mlflow.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.tar
+
+# OS
+.DS_Store
+Thumbs.db

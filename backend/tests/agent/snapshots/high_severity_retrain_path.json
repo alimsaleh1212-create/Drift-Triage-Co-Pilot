@@ -1,0 +1,59 @@
+{
+  "scenario": "high_severity_retrain_path",
+  "webhook": {
+    "version": "v1",
+    "report_id": "rpt-001",
+    "model_name": "drift-triage-classifier",
+    "model_version": 1,
+    "severity": "high",
+    "psi_results": [
+      {"feature": "euribor3m", "psi": 0.41, "severity": "high", "reference_n": 1000, "current_n": 500}
+    ],
+    "chi2_results": [
+      {"feature": "job", "statistic": 22.1, "p_value": 0.003, "dof": 9, "severity": "high", "reference_n": 1000, "current_n": 500}
+    ],
+    "output_drift": {"psi": 0.18, "severity": "medium", "reference_class_1_rate": 0.11, "current_class_1_rate": 0.19, "current_n": 500},
+    "timestamp": "2026-05-05T09:00:00Z",
+    "window_size": 500
+  },
+  "llm_responses": [
+    {
+      "node": "triage",
+      "args": {
+        "drifted_features": ["euribor3m", "job"],
+        "severity": "high",
+        "hypothesis": "euribor3m shifted significantly (+2σ). Job distribution changed. Likely macroeconomic shift.",
+        "should_act": true
+      }
+    },
+    {
+      "node": "comms",
+      "args": {
+        "summary_md": "## Investigation test-inv\n\n**Severity:** high  **Action:** retrain\n\n### Drifted features\n- `euribor3m`: PSI=0.41 (high)\n- `job`: p=0.003 (high)\n\n### Hypothesis\neuribor3m shifted significantly.",
+        "hil_message": "Investigation test-inv requires retrain approval. High-severity drift detected in euribor3m and job. Approving will enqueue a full retrain."
+      }
+    }
+  ],
+  "expected_state_after": [
+    {
+      "node": "triage",
+      "fields": {
+        "severity_in_alert": "high",
+        "triage_notes_nonempty": true
+      }
+    },
+    {
+      "node": "action",
+      "fields": {
+        "proposed_action": "retrain",
+        "awaiting_approval": true
+      }
+    },
+    {
+      "node": "comms",
+      "fields": {
+        "summary_md_nonempty": true
+      }
+    }
+  ]
+}

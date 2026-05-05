@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drift-triage-copilot"
+version = "0.1.0"
+description = "Self-healing MLOps stack: drift detection, LangGraph triage agent, HIL approval, arq queue"
+requires-python = ">=3.11"
+dependencies = [
+    # Web framework
+    "fastapi==0.115.12",
+    "uvicorn[standard]==0.34.2",
+    # Database
+    "sqlalchemy[asyncio]==2.0.40",
+    "asyncpg==0.30.0",
+    "alembic==1.15.2",
+    # Pydantic + settings
+    "pydantic==2.11.3",
+    "pydantic-settings==2.9.1",
+    # Secrets
+    "hvac==2.3.0",
+    # HTTP client
+    "httpx==0.28.1",
+    "tenacity==9.1.2",
+    # LLM
+    "google-generativeai==0.8.4",
+    # LangGraph
+    "langgraph==0.3.28",
+    "langgraph-checkpoint-postgres==2.0.13",
+    # Queue
+    "arq==0.26.1",
+    "redis==5.2.1",
+    # ML
+    "scikit-learn==1.6.1",
+    "pandas==2.2.3",
+    "numpy==1.26.4",
+    "scipy==1.14.1",
+    "joblib==1.4.2",
+    # MLflow
+    "mlflow==2.21.3",
+    # Observability
+    "structlog==25.1.0",
+    # Dashboard
+    "streamlit==1.44.1",
+    "streamlit-autorefresh==1.0.1",
+    "plotly==5.24.1",
+    # Caching
+    "cachetools==5.5.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.5",
+    "pytest-asyncio==0.26.0",
+    "pytest-cov==6.1.0",
+    "httpx==0.28.1",  # for TestClient
+    "black==25.1.0",
+    "isort==5.13.2",
+    "flake8==7.2.0",
+    "mypy==1.15.0",
+    "pre-commit==4.2.0",
+    "types-cachetools==5.5.0.20240820",
+    "pandas-stubs==2.2.3.241126",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/core", "src/ml", "src/drift", "src/service", "src/agent", "src/worker"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["mlflow.*", "hvac.*", "arq.*", "google.generativeai.*", "streamlit.*", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/migrations/*", "*/prompts/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
