@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,8 +25,8 @@ def client():
     with patch("service.main.get_settings") as mock_settings, \
          patch("service.main.load_model") as mock_load, \
          patch("service.main.load_reference_stats"), \
-         patch("service.main.create_async_engine"), \
-         patch("service.main.async_sessionmaker"), \
+         patch("service.main.create_async_engine") as mock_create_engine, \
+         patch("service.main.async_sessionmaker") as mock_sessionmaker, \
          patch("service.routers.promotion.get_settings"):
         from core.settings import Settings
 
@@ -37,8 +38,18 @@ def client():
         mock_settings.return_value = settings
 
         pipeline_mock = MagicMock()
-        pipeline_mock.predict_proba = MagicMock(return_value=[[0.25, 0.75]])
+        pipeline_mock.predict_proba = MagicMock(return_value=np.array([[0.25, 0.75]]))
         mock_load.return_value = (pipeline_mock, 0.5)
+        engine = MagicMock()
+        engine.dispose = AsyncMock()
+        mock_create_engine.return_value = engine
+
+        session = MagicMock()
+        session.execute = AsyncMock()
+        session.commit = AsyncMock()
+        session.rollback = AsyncMock()
+        session.close = AsyncMock()
+        mock_sessionmaker.return_value = MagicMock(return_value=session)
 
         with patch("service.routers.promotion.get_settings", return_value=settings):
             from service.main import app
@@ -75,14 +86,14 @@ def test_promotion_rejects_missing_api_key(client):
 
 
 def test_promotion_rejects_low_recall(client):
-    with patch("service.routers.promotion.mlflow") as mock_mlflow:
+    with patch("mlflow.MlflowClient") as mock_mlflow_client, \
+         patch("mlflow.set_tracking_uri"):
         mock_client = MagicMock()
         target = _make_model_version("Staging", tags={"auc": "0.85", "recall": "0.60"})
         prod = _make_model_version("Production", tags={"auc": "0.83"})
         mock_client.get_model_version.return_value = target
         mock_client.get_latest_versions.return_value = [prod]
-        mock_mlflow.MlflowClient.return_value = mock_client
-        mock_mlflow.set_tracking_uri = MagicMock()
+        mock_mlflow_client.return_value = mock_client
 
         response = client.post(
             "/api/v1/promotion/promote",
@@ -99,14 +110,14 @@ def test_promotion_rejects_low_recall(client):
 
 
 def test_promotion_rejects_lower_auc(client):
-    with patch("service.routers.promotion.mlflow") as mock_mlflow:
+    with patch("mlflow.MlflowClient") as mock_mlflow_client, \
+         patch("mlflow.set_tracking_uri"):
         mock_client = MagicMock()
         target = _make_model_version("Staging", tags={"auc": "0.80", "recall": "0.80"})
         prod = _make_model_version("Production", tags={"auc": "0.85"})
         mock_client.get_model_version.return_value = target
         mock_client.get_latest_versions.return_value = [prod]
-        mock_mlflow.MlflowClient.return_value = mock_client
-        mock_mlflow.set_tracking_uri = MagicMock()
+        mock_mlflow_client.return_value = mock_client
 
         response = client.post(
             "/api/v1/promotion/promote",

@@ -35,7 +35,7 @@ class TestPredictBatch:
     def test_predict_batch_positive_class(self):
         X = pd.DataFrame({"feat": [1.0, 2.0]})
         pipeline = Pipeline([("clf", DummyClassifier(strategy="most_frequent"))])
-        pipeline.fit(X, [1, 1])
+        pipeline.fit(X, [0, 1])
         result = predict_batch(X, pipeline)
         assert result.shape == (2,)
 

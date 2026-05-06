@@ -103,6 +103,33 @@ async def approve_hil(payload: HILApprovalRequest) -> HILApprovalResponse:
         decision=payload.decision,
     )
 
+    async with get_session() as session:
+        from sqlalchemy import text
+
+        await session.execute(
+            text(
+                "UPDATE hil_approvals "
+                "SET status = :status, decision = :decision, decided_at = now() "
+                "WHERE id = :approval_id AND investigation_id = :investigation_id"
+            ),
+            {
+                "status": payload.decision,
+                "decision": payload.decision,
+                "approval_id": payload.hil_approval_id,
+                "investigation_id": payload.investigation_id,
+            },
+        )
+        if payload.decision == "rejected":
+            await session.execute(
+                text(
+                    "UPDATE investigations "
+                    "SET status = 'resolved', updated_at = now() "
+                    "WHERE id = :investigation_id"
+                ),
+                {"investigation_id": payload.investigation_id},
+            )
+        await session.commit()
+
     if payload.decision == "approved":
         graph = app.state.graph
         config = {"configurable": {"thread_id": payload.investigation_id}}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 def _mock_pipeline_predict_proba(proba: float):
     """Return a mock pipeline that always predicts the given probability."""
     pipeline = MagicMock()
-    pipeline.predict_proba = MagicMock(return_value=[[1 - proba, proba]])
+    pipeline.predict_proba = MagicMock(return_value=np.array([[1 - proba, proba]]))
     return pipeline
 
 
@@ -37,8 +38,8 @@ def client():
     with patch("service.main.get_settings") as mock_settings, \
          patch("service.main.load_model") as mock_load, \
          patch("service.main.load_reference_stats", return_value=ref_stats), \
-         patch("service.main.create_async_engine"), \
-         patch("service.main.async_sessionmaker"):
+         patch("service.main.create_async_engine") as mock_create_engine, \
+         patch("service.main.async_sessionmaker") as mock_sessionmaker:
         from core.settings import Settings
 
         mock_settings.return_value = Settings(
@@ -47,6 +48,16 @@ def client():
             promotion_api_key="test_promotion_key_16ch",
         )
         mock_load.return_value = (_mock_pipeline_predict_proba(0.75), 0.5)
+        engine = MagicMock()
+        engine.dispose = AsyncMock()
+        mock_create_engine.return_value = engine
+
+        session = MagicMock()
+        session.execute = AsyncMock()
+        session.commit = AsyncMock()
+        session.rollback = AsyncMock()
+        session.close = AsyncMock()
+        mock_sessionmaker.return_value = MagicMock(return_value=session)
 
         from service.main import app
 

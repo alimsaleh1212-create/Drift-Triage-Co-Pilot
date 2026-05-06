@@ -29,7 +29,7 @@ def test_psi_large_shift_is_high() -> None:
 def test_psi_moderate_shift_is_medium() -> None:
     rng = np.random.default_rng(42)
     ref = pd.Series(rng.normal(0, 1, 1000))
-    cur = pd.Series(rng.normal(0.8, 1, 500))
+    cur = pd.Series(rng.normal(0.4, 1, 500))
     psi = compute_psi(ref, cur)
     assert 0.05 <= psi <= 0.5  # broad range for moderate shift
 

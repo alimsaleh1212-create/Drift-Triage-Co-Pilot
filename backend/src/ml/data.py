@@ -24,6 +24,35 @@ log = structlog.get_logger(__name__)
 TARGET_COLUMN = "y"
 LEAKAGE_COLUMNS = ["duration"]
 
+# Canonical feature lists used by both training and drift monitoring.
+# Do NOT include "duration" because it leaks the target.
+# "pdays_was_999" is created below as a sentinel flag.
+NUMERIC_FEATURES = [
+    "age",
+    "campaign",
+    "pdays",
+    "previous",
+    "emp.var.rate",
+    "cons.price.idx",
+    "cons.conf.idx",
+    "euribor3m",
+    "nr.employed",
+    "pdays_was_999",
+]
+
+CATEGORICAL_FEATURES = [
+    "job",
+    "marital",
+    "education",
+    "default",
+    "housing",
+    "loan",
+    "contact",
+    "month",
+    "day_of_week",
+    "poutcome",
+]
+
 
 @dataclass
 class DataSplit:
@@ -79,7 +108,7 @@ def load_data(csv_path: Path | None = None) -> DataSplit:
 
     df = df.drop(columns=LEAKAGE_COLUMNS, errors="ignore")
 
-    #created a flag , 999 means the client was not previously contacted
+    # 999 means the client was not previously contacted.
     if "pdays" in df.columns:
         df["pdays_was_999"] = (df["pdays"] == 999).astype(int)
 
@@ -106,8 +135,9 @@ def load_data(csv_path: Path | None = None) -> DataSplit:
         random_state=settings.random_state,
     )
 
-    numeric_features = X_train.select_dtypes(include=["int64", "float64"]).columns.tolist()
-    categorical_features = X_train.select_dtypes(include=["object"]).columns.tolist()
+    # Use the canonical lists, but only keep columns that are present.
+    numeric_features = [col for col in NUMERIC_FEATURES if col in X_train.columns]
+    categorical_features = [col for col in CATEGORICAL_FEATURES if col in X_train.columns]
 
     log.info(
         "data.split",

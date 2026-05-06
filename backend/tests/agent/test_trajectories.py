@@ -26,7 +26,7 @@ async def test_high_severity_triage_proposes_retrain(
     fake_llm = fake_llm_factory("high_severity_retrain_path")
 
     with (
-        patch("agent.llm.call_llm", side_effect=fake_llm),
+        patch("agent.llm.call_llm", new=fake_llm),
         patch(
             "agent.tools.inspect_drift._fetch_report",
             new=AsyncMock(return_value=_make_drift_report(webhook_data)),
@@ -46,6 +46,9 @@ async def test_high_severity_triage_proposes_retrain(
             AgentState,
             action_node,
             comms_node,
+            request_hil_node,
+            route_from_supervisor,
+            supervisor_node,
             triage_node,
         )
 
@@ -64,13 +67,20 @@ async def test_high_severity_triage_proposes_retrain(
             "drift_report_id": webhook_data["report_id"],
         }
 
-        # Step 1 — triage
+        # Step 1 — supervisor routes the fresh webhook to triage.
+        state = await supervisor_node(state)
+        assert route_from_supervisor(state) == "triage_agent"
+
+        # Step 2 — triage
         state = await triage_node(state)
         exp_triage = expected[0]["fields"]
         assert state["alert"]["severity"] == exp_triage["severity_in_alert"]
         assert bool(state["triage_notes"]) == exp_triage["triage_notes_nonempty"]
 
-        # Step 2 — action
+        state = await supervisor_node(state)
+        assert route_from_supervisor(state) == "action_agent"
+
+        # Step 3 — action sub-agent proposes only; supervisor owns HIL routing.
         with patch(
             "agent.staleness.assert_not_stale",
             new=AsyncMock(return_value=None),
@@ -78,9 +88,19 @@ async def test_high_severity_triage_proposes_retrain(
             state = await action_node(state)
         exp_action = expected[1]["fields"]
         assert state["proposed_action"] == exp_action["proposed_action"]
+        assert state["awaiting_approval"] is False
+
+        state = await supervisor_node(state)
+        assert route_from_supervisor(state) == "request_hil"
+
+        # Step 4 — HIL request node creates the approval and supervisor pauses.
+        state = await request_hil_node(state)
         assert state["awaiting_approval"] == exp_action["awaiting_approval"]
 
-        # Step 3 — comms
+        state = await supervisor_node(state)
+        assert route_from_supervisor(state) == "pause_for_human"
+
+        # Step 5 — comms remains a sub-agent node.
         state = await comms_node(state)
         exp_comms = expected[2]["fields"]
         assert bool(state["summary_md"]) == exp_comms["summary_md_nonempty"]
