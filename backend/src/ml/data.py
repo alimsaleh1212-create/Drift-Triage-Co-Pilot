@@ -13,9 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
-
 import structlog
+from sklearn.model_selection import train_test_split
 
 from core.settings import get_settings
 
@@ -24,9 +23,6 @@ log = structlog.get_logger(__name__)
 TARGET_COLUMN = "y"
 LEAKAGE_COLUMNS = ["duration"]
 
-# Canonical feature lists used by both training and drift monitoring.
-# Do NOT include "duration" because it leaks the target.
-# "pdays_was_999" is created below as a sentinel flag.
 NUMERIC_FEATURES = [
     "age",
     "campaign",
@@ -81,7 +77,7 @@ def _sha256_of(path: Path) -> str:
 
 
 def load_data(csv_path: Path | None = None) -> DataSplit:
-    """Load raw CSV, apply feature engineering, return stratified split.
+    """Load raw CSV, apply feature engineering, return stratified 60/20/20 split.
 
     Args:
         csv_path: Path to bank-additional-full.csv. Defaults to
@@ -106,31 +102,42 @@ def load_data(csv_path: Path | None = None) -> DataSplit:
 
     dataset_hash = _sha256_of(csv_path)
 
+    # Drop post-call leakage column before splitting/training.
     df = df.drop(columns=LEAKAGE_COLUMNS, errors="ignore")
 
     # 999 means the client was not previously contacted.
+    # Keep pdays itself and add a separate sentinel flag.
     if "pdays" in df.columns:
         df["pdays_was_999"] = (df["pdays"] == 999).astype(int)
 
     X = df.drop(columns=[TARGET_COLUMN])
     y = df[TARGET_COLUMN].map({"no": 0, "yes": 1})
 
-    test_size = settings.test_size
-    val_size = settings.val_size
-    val_ratio = val_size / (1 - test_size)
+    test_size = settings.test_size  # expected 0.2
+    val_size = settings.val_size    # expected 0.2
+    temp_size = val_size + test_size  # 0.4 for 60/20/20
 
+    if temp_size <= 0 or temp_size >= 1:
+        raise ValueError(
+            f"Invalid split sizes: val_size + test_size must be between 0 and 1, got {temp_size}."
+        )
+
+    # First split: 60% train, 40% temporary.
     X_train, X_temp, y_train, y_temp = train_test_split(
         X,
         y,
-        test_size=test_size,
+        test_size=temp_size,
         stratify=y,
         random_state=settings.random_state,
     )
 
+    # Second split: temporary 40% becomes 20% validation and 20% test.
+    test_ratio_within_temp = test_size / temp_size
+
     X_val, X_test, y_val, y_test = train_test_split(
         X_temp,
         y_temp,
-        test_size=val_ratio,
+        test_size=test_ratio_within_temp,
         stratify=y_temp,
         random_state=settings.random_state,
     )
