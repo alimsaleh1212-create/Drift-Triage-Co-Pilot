@@ -34,6 +34,7 @@ def chi2_result(
     feature: str,
     reference_freqs: dict[str, float],
     current: pd.Series,
+    alpha: float | None = None,
 ) -> Chi2Result:
     """Chi-squared test comparing current category counts to reference frequencies.
 
@@ -41,11 +42,13 @@ def chi2_result(
         feature: Column name.
         reference_freqs: Relative frequency dict from ReferenceStats.categorical.
         current: Current rolling-window series of category values.
+        alpha: Significance threshold (defaults to Settings.drift_chi2_alpha).
 
     Returns:
         Chi2Result with test statistic, p-value, and severity.
     """
-    settings = get_settings()
+    if alpha is None:
+        alpha = get_settings().drift_chi2_alpha
     all_cats = sorted(reference_freqs.keys())
 
     ref_n = sum(reference_freqs.values())
@@ -76,7 +79,7 @@ def chi2_result(
         statistic=chi2_stat,
         p_value=p_value,
         dof=dof,
-        severity=_chi2_severity(p_value, settings.drift_chi2_alpha),
+        severity=_chi2_severity(p_value, alpha),
         reference_n=int(ref_n * cur_total),  # approximation for logging
         current_n=cur_total,
     )

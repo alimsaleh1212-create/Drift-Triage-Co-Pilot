@@ -8,7 +8,14 @@ from pydantic import ValidationError
 from drift.chi2 import Chi2Result
 from drift.output_drift import OutputDriftResult
 from drift.psi import PSIResult
-from drift.severity import DriftReport, build_drift_report
+from drift.severity import (
+    DriftReport,
+    DriftWebhookPayload,
+    WebhookChi2Result,
+    WebhookOutputDrift,
+    WebhookPSIResult,
+    build_drift_report,
+)
 from service.routers.prediction import PredictRequest, PredictResponse
 from service.routers.promotion import PromotionRequest
 
@@ -94,4 +101,58 @@ def test_promotion_request_rejects_zero_version() -> None:
     with pytest.raises(ValidationError):
         PromotionRequest(
             model_name="m", target_version=0, investigation_id="i", hil_approval_id="h"
+        )
+
+
+# ── DriftWebhookPayload ──────────────────────────────────────────────────────
+
+
+def test_webhook_payload_valid() -> None:
+    payload = DriftWebhookPayload(
+        version="v1",
+        report_id="rpt-abc",
+        model_name="bank-marketing-classifier",
+        model_version=1,
+        severity="high",
+        psi_results=[WebhookPSIResult(feature="euribor3m", psi=0.35, severity="high")],
+        chi2_results=[
+            WebhookChi2Result(feature="job", statistic=25.0, p_value=0.003, severity="high")
+        ],
+        output_drift=WebhookOutputDrift(psi=0.15, severity="medium"),
+        timestamp="2025-01-01T00:00:00Z",
+        window_size=500,
+    )
+    assert payload.version == "v1"
+    assert payload.severity == "high"
+
+
+def test_webhook_payload_rejects_invalid_version() -> None:
+    with pytest.raises(ValidationError):
+        DriftWebhookPayload(
+            version="v2",
+            report_id="rpt-1",
+            model_name="m",
+            model_version=1,
+            severity="low",
+            psi_results=[],
+            chi2_results=[],
+            output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
+            timestamp="2025-01-01T00:00:00Z",
+            window_size=100,
+        )
+
+
+def test_webhook_payload_rejects_invalid_severity() -> None:
+    with pytest.raises(ValidationError):
+        DriftWebhookPayload(
+            version="v1",
+            report_id="rpt-1",
+            model_name="m",
+            model_version=1,
+            severity="critical",
+            psi_results=[],
+            chi2_results=[],
+            output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
+            timestamp="2025-01-01T00:00:00Z",
+            window_size=100,
         )

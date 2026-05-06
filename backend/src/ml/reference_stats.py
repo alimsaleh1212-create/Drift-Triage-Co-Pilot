@@ -70,6 +70,7 @@ def compute_reference_stats(
             "mean": float(series.mean()),
             "std": float(series.std()),
             "quantiles": [float(q) for q in np.quantile(series, np.arange(0.1, 1.0, 0.1))],
+            "reference_values": series.tolist(),
         }
 
     categorical_stats: dict[str, dict[str, float]] = {}

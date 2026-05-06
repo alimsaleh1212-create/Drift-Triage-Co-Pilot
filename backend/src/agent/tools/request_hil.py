@@ -7,8 +7,13 @@ from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
+from agent.deps.db import get_session
 from agent.tools.base import BaseTool
+from core.logging import get_logger
+
+log = get_logger(__name__)
 
 
 class RequestHILInput(BaseModel):
@@ -32,17 +37,9 @@ class RequestHIL(BaseTool[RequestHILInput, RequestHILOutput]):
     output_schema = RequestHILOutput
 
     async def run(self, args: RequestHILInput) -> RequestHILOutput:
-        # Persist to Postgres hil_approvals table
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        from core.settings import get_settings
-
-        settings = get_settings()
-        engine = create_async_engine(settings.async_database_url)
         approval_id = str(uuid4())
-        async with engine.begin() as conn:
-            await conn.execute(
+        async with get_session() as session:
+            await session.execute(
                 text(
                     "INSERT INTO hil_approvals "
                     "(id, investigation_id, action, rationale, model_version, status, created_at) "
@@ -56,7 +53,7 @@ class RequestHIL(BaseTool[RequestHILInput, RequestHILOutput]):
                     "mv": args.model_version,
                 },
             )
-        await engine.dispose()
+            await session.commit()
         return RequestHILOutput(
             approval_id=approval_id,
             status="pending",

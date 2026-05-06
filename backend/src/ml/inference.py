@@ -1,4 +1,4 @@
-"""Prediction helper: convert validated request to DataFrame row and predict.
+"""Prediction helpers: single-row and batch inference utilities.
 
 Per CLAUDE.md §6, the pipeline and threshold are injected via FastAPI
 Depends() from app.state — no globals, no module-level joblib.load().
@@ -8,6 +8,7 @@ as arguments.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
@@ -82,3 +83,23 @@ def predict_one(
         subscribe_probability=probability_yes,
         subscribe_label=label,
     )
+
+
+def predict_batch(
+    X: pd.DataFrame,
+    pipeline: Pipeline,
+) -> np.ndarray:
+    """Predict positive-class probabilities for a batch of rows.
+
+    Used by drift detection (output drift), reference stats, and the
+    replay-test worker.  The function is synchronous (sklearn is CPU-bound);
+    callers wrap it in ``asyncio.to_thread()`` at the router level.
+
+    Args:
+        X: DataFrame with columns matching training features.
+        pipeline: Fitted sklearn pipeline (injected via Depends or loaded).
+
+    Returns:
+        1-D numpy array of probabilities for the positive class.
+    """
+    return pipeline.predict_proba(X)[:, 1]

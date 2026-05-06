@@ -187,6 +187,13 @@ def register_model(
         archive_existing_versions=True,
     )
 
+    client.set_model_version_tag(
+        name=MODEL_NAME,
+        version=latest_version.version,
+        key="operating_threshold",
+        value=str(threshold),
+    )
+
     staging_uri = f"models:/{MODEL_NAME}/Staging"
     registered_pipeline = mlflow.sklearn.load_model(staging_uri)
 
@@ -213,8 +220,8 @@ def register_model(
 def load_model(model_name: str = MODEL_NAME) -> tuple[Pipeline, float]:
     """Load the Production model and its operating threshold from MLflow.
 
-    Called in service/main.py lifespan to populate app.state.classifier
-    and app.state.threshold.
+    Falls back to Staging if no Production version exists (e.g. after initial
+    ``make train``). Called in service/main.py lifespan.
 
     Args:
         model_name: MLflow registered model name.
@@ -223,23 +230,45 @@ def load_model(model_name: str = MODEL_NAME) -> tuple[Pipeline, float]:
         Tuple of (fitted sklearn Pipeline, operating threshold float).
 
     Raises:
-        mlflow.exceptions.MlflowException: If no Production version exists.
+        RuntimeError: If no Production or Staging version exists.
     """
     settings = get_settings()
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
 
     client = mlflow.MlflowClient()
     versions = client.get_latest_versions(model_name, stages=["Production"])
+    stage = "Production"
     if not versions:
-        raise mlflow.exceptions.MlflowException(
-            f"No Production model found for '{model_name}'. Run `make train` first."
+        log.warning("register.no_production_model", model_name=model_name)
+        versions = client.get_latest_versions(model_name, stages=["Staging"])
+        stage = "Staging"
+    if not versions:
+        raise RuntimeError(
+            f"No Production or Staging model found for '{model_name}'. "
+            "Run `make train` first."
         )
 
     version = versions[0]
     pipeline = mlflow.sklearn.load_model(version.source)
-    threshold = float(
-        client.get_model_version_tag(model_name, version.version, "operating_threshold")
-    )
 
-    log.info("register.load_model", model_name=model_name, version=version.version, threshold=threshold)
+    threshold_tag = client.get_model_version_tag(
+        model_name, version.version, "operating_threshold"
+    )
+    if threshold_tag is None:
+        run = client.get_run(version.run_id)
+        threshold_tag = run.data.params.get("operating_threshold")
+    if threshold_tag is None:
+        raise RuntimeError(
+            f"No operating threshold found for {model_name} v{version.version}. "
+            "Re-train to register the threshold."
+        )
+
+    threshold = float(threshold_tag)
+    log.info(
+        "register.load_model",
+        model_name=model_name,
+        version=version.version,
+        stage=stage,
+        threshold=threshold,
+    )
     return pipeline, threshold
