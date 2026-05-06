@@ -1,12 +1,73 @@
 """Register trained model and artifacts in MLflow.
 
-STUB — partner implements the body. Signatures and return types are final.
+Handles logging, staging, fidelity check, and production loading. The
+register_model function is called from train.py after best-model selection.
+The load_model function is called in the FastAPI lifespan to populate
+app.state.classifier and app.state.threshold.
 """
 
 from __future__ import annotations
 
-from ml.reference_stats import ReferenceStats
-from ml.train import TrainResult
+import platform
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import mlflow
+import mlflow.sklearn
+import numpy as np
+import pandas as pd
+from mlflow.models import infer_signature
+from mlflow.tracking import MlflowClient
+from sklearn.pipeline import Pipeline
+
+import structlog
+
+from core.settings import get_settings
+from ml.reference_stats import ReferenceStats, save_reference_stats
+
+if TYPE_CHECKING:
+    from ml.train import TrainResult
+
+log = structlog.get_logger(__name__)
+
+MODEL_NAME = "bank-marketing-classifier"
+
+REPORT_OUTPUT_PATH = Path("artifacts/reports/training_report.json")
+THRESHOLD_OUTPUT_PATH = Path("artifacts/reports/operating_threshold.json")
+MODEL_CARD_PATH = Path("artifacts/reports/model_card.md")
+MODEL_OUTPUT_PATH = Path("artifacts/models/bank_marketing_model.joblib")
+
+
+def _utc_now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _environment_fingerprint() -> dict[str, str]:
+    """Capture package versions for reproducibility."""
+    import sklearn
+
+    return {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "sklearn": sklearn.__version__,
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "mlflow": mlflow.__version__,
+        "captured_at": _utc_now(),
+    }
+
+
+def _sha256_of(path: Path) -> str:
+    """Return hex SHA-256 digest of a file."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(64 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def register_model(
@@ -14,29 +75,142 @@ def register_model(
     threshold: float,
     ref_stats: ReferenceStats,
     dataset_hash: str,
+    split_data: object | None = None,
 ) -> str:
     """Log and register the best model in MLflow.
 
-    Partner implements this function. Per CLAUDE.md §17:
+    Per CLAUDE.md §17:
     - Log binary (joblib pipeline), input schema, model card.
-    - Model card includes: version hash, env fingerprint, training date,
+    - Model card includes version hash, environment fingerprint, training date,
       metrics, operating threshold, dataset hash.
-    - Register as 'Staging' in MLflow model registry.
+    - Register as Staging in MLflow model registry.
     - Persist reference stats JSON as a run artifact.
+    - Fidelity check: assert registered model predictions match source to 1e-12.
 
     Args:
         result: TrainResult with fitted pipeline and metrics.
         threshold: Operating threshold from find_threshold().
         ref_stats: Reference statistics from compute_reference_stats().
         dataset_hash: SHA-256 hash of the raw CSV.
+        split_data: DataSplit used (for signature and fidelity check).
 
     Returns:
         MLflow run ID for the registered model.
     """
-    raise NotImplementedError("ML stub — partner implements")
+    settings = get_settings()
+
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    experiment_name = "week5-bank-marketing"
+    existing = mlflow.get_experiment_by_name(experiment_name)
+    if existing is None:
+        mlflow.create_experiment(experiment_name)
+    mlflow.set_experiment(experiment_name)
+
+    pipeline = result.pipeline
+    env_meta = _environment_fingerprint()
+    artifact_hash = _sha256_of(MODEL_OUTPUT_PATH)
+
+    ref_stats_path = save_reference_stats(ref_stats)
+
+    signature = None
+    input_example = None
+    if split_data is not None:
+        signature = infer_signature(
+            split_data.X_val.head(100),
+            pipeline.predict_proba(split_data.X_val.head(100)),
+        )
+        input_example = split_data.X_train.head(2)
+
+    with mlflow.start_run(run_name=f"train-{result.model_name}") as run:
+        mlflow.log_params(
+            {
+                "selected_model": result.model_name,
+                "random_state": settings.random_state,
+                "min_recall": settings.min_recall,
+                "operating_threshold": threshold,
+                "n_numeric_features": len(split_data.numeric_features) if split_data else 0,
+                "n_categorical_features": len(split_data.categorical_features) if split_data else 0,
+            }
+        )
+
+        mlflow.log_metrics(
+            {
+                "test_auc": result.auc,
+                "test_f1": result.f1,
+                "test_precision": result.precision,
+                "test_recall": result.recall,
+                "test_accuracy": result.accuracy,
+                "train_val_auc_gap": result.train_val_auc_gap,
+            }
+        )
+
+        for key, value in env_meta.items():
+            mlflow.set_tag(f"env.{key}", value)
+
+        mlflow.set_tag("artifact.sha256", artifact_hash)
+        mlflow.set_tag("dataset", "UCI Bank Marketing bank-additional-full.csv")
+        mlflow.set_tag("dropped.duration", "true")
+        mlflow.set_tag("pdays_999_handling", "pdays_was_999 flag")
+        mlflow.set_tag("operating_threshold", str(threshold))
+
+        mlflow.sklearn.log_model(
+            sk_model=pipeline,
+            artifact_path="model",
+            signature=signature,
+            input_example=input_example,
+            registered_model_name=MODEL_NAME,
+        )
+
+        mlflow.log_artifact(str(ref_stats_path), artifact_path="reports")
+
+        if REPORT_OUTPUT_PATH.exists():
+            mlflow.log_artifact(str(REPORT_OUTPUT_PATH), artifact_path="reports")
+
+        if THRESHOLD_OUTPUT_PATH.exists():
+            mlflow.log_artifact(str(THRESHOLD_OUTPUT_PATH), artifact_path="reports")
+
+        if MODEL_CARD_PATH.exists():
+            mlflow.log_artifact(str(MODEL_CARD_PATH), artifact_path="docs")
+
+        run_id = run.info.run_id
+
+    client = MlflowClient()
+    versions = client.search_model_versions(f"name='{MODEL_NAME}'")
+    if not versions:
+        raise RuntimeError(f"No versions found for model '{MODEL_NAME}'")
+    latest_version = sorted(versions, key=lambda mv: int(mv.version))[-1]
+
+    client.transition_model_version_stage(
+        name=MODEL_NAME,
+        version=latest_version.version,
+        stage="Staging",
+        archive_existing_versions=True,
+    )
+
+    staging_uri = f"models:/{MODEL_NAME}/Staging"
+    registered_pipeline = mlflow.sklearn.load_model(staging_uri)
+
+    if split_data is not None:
+        source_proba = pipeline.predict_proba(split_data.X_val.head(10))
+        registered_proba = registered_pipeline.predict_proba(split_data.X_val.head(10))
+        max_diff = float(np.max(np.abs(source_proba - registered_proba)))
+        assert np.allclose(source_proba, registered_proba, atol=1e-12), (
+            f"Registered model predictions differ from source model. Max diff: {max_diff:.2e}"
+        )
+        log.info("register.fidelity_check", max_diff=f"{max_diff:.2e}")
+
+    log.info(
+        "register.complete",
+        run_id=run_id,
+        model_name=MODEL_NAME,
+        version=latest_version.version,
+        threshold=threshold,
+    )
+
+    return run_id
 
 
-def load_model(model_name: str = "drift-triage-classifier") -> tuple[object, float]:
+def load_model(model_name: str = MODEL_NAME) -> tuple[Pipeline, float]:
     """Load the Production model and its operating threshold from MLflow.
 
     Called in service/main.py lifespan to populate app.state.classifier
@@ -51,10 +225,6 @@ def load_model(model_name: str = "drift-triage-classifier") -> tuple[object, flo
     Raises:
         mlflow.exceptions.MlflowException: If no Production version exists.
     """
-    import mlflow
-
-    from core.settings import get_settings
-
     settings = get_settings()
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
 
@@ -64,9 +234,12 @@ def load_model(model_name: str = "drift-triage-classifier") -> tuple[object, flo
         raise mlflow.exceptions.MlflowException(
             f"No Production model found for '{model_name}'. Run `make train` first."
         )
+
     version = versions[0]
     pipeline = mlflow.sklearn.load_model(version.source)
     threshold = float(
-        client.get_model_version_tag(model_name, version.version, "threshold")
+        client.get_model_version_tag(model_name, version.version, "operating_threshold")
     )
+
+    log.info("register.load_model", model_name=model_name, version=version.version, threshold=threshold)
     return pipeline, threshold
