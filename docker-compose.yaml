@@ -1,87 +1,43 @@
-# docker-compose.yaml — Drift Triage Co-Pilot full stack
+# docker-compose.yaml — Drift Triage Co-Pilot stack (MLflow + services only)
+#
+# Postgres, Redis, pgAdmin run in shared infra at ~/infra/
+# Start infra first:  docker compose -f ~/infra/docker-compose.yml up -d
 #
 # Services:
-#   postgres    — Postgres 16 + pgvector; init script creates extensions and tables.
-#   redis       — Redis 7 for arq queue and dedup keys.
 #   mlflow      — MLflow tracking server (Postgres backend, local artifact store).
 #   service     — FastAPI model service (predict, drift, promotion).
 #   agent       — FastAPI agent service (webhook, HIL, investigations).
 #   worker      — arq async worker (replay_test, retrain, rollback).
 #   dashboard   — Streamlit dashboard.
-#   pgadmin     — Optional pgAdmin 4 for database inspection.
 #
 # Quick start:
-#   cp .env.example .env
-#   # Edit .env — fill in REQUIRED secrets (GOOGLE_API_KEY, POSTGRES_PASSWORD, etc.)
-#   make train                       # register model, write artifacts/
+#   docker compose -f ~/infra/docker-compose.yml up -d
+#   cp .env.example .env  # fill GOOGLE_API_KEY, POSTGRES_PASSWORD, PROMOTION_API_KEY
+#   make train            # register model, write artifacts/
 #   docker compose up -d
 
 services:
-
-  # ─── Postgres 16 + pgvector ───────────────────────────────────────────────
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: dt_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-drift_triage}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: ${POSTGRES_DB:-drift_triage}
-    ports:
-      - "5432:5432"
-    networks:
-      - dt_network
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./infra/postgres/init-pgvector.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-drift_triage} -d ${POSTGRES_DB:-drift_triage}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ─── Redis 7 ──────────────────────────────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: dt_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    networks:
-      - dt_network
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   # ─── MLflow tracking server ────────────────────────────────────────────────
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.21.3
     container_name: dt_mlflow
     restart: unless-stopped
+    network_mode: host
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-drift_triage}
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB:-drift_triage}
       MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
-    ports:
-      - "5000:5000"
-    networks:
-      - dt_network
     volumes:
       - mlflow_data:/mlflow/artifacts
-    depends_on:
-      postgres:
-        condition: service_healthy
     command: >
+      sh -c "pip install -q psycopg2-binary &&
       mlflow server
-      --backend-store-uri postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-drift_triage}
+      --backend-store-uri postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB:-drift_triage}
       --default-artifact-root /mlflow/artifacts
-      --host 0.0.0.0
-      --port 5000
+      --host 127.0.0.1
+      --port 5000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5000/health || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -107,10 +63,6 @@ services:
     volumes:
       - ./backend/artifacts:/app/artifacts:ro
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       mlflow:
         condition: service_healthy
     healthcheck:
@@ -137,10 +89,6 @@ services:
     networks:
       - dt_network
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       mlflow:
         condition: service_healthy
     healthcheck:
@@ -166,11 +114,6 @@ services:
       - dt_network
     volumes:
       - ./backend/artifacts:/app/artifacts
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
 
   # ─── Streamlit dashboard ──────────────────────────────────────────────────
   dashboard:
@@ -191,30 +134,9 @@ services:
       agent:
         condition: service_healthy
 
-  # ─── pgAdmin 4 (optional, development convenience) ────────────────────────
-  pgadmin:
-    image: dpage/pgadmin4:8.13
-    container_name: dt_pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@drift-triage.local}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-changeme}
-    ports:
-      - "8888:80"
-    networks:
-      - dt_network
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      postgres:
-        condition: service_healthy
-
 networks:
   dt_network:
     driver: bridge
 
 volumes:
-  postgres_data:
-  redis_data:
   mlflow_data:
-  pgadmin_data:

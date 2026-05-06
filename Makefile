@@ -1,4 +1,4 @@
-.PHONY: install data train up down logs test lint fmt ci demo-drift
+.PHONY: install data train infra-up infra-down mlflow-up dev-service dev-agent dev-worker dev-dashboard up down logs test lint fmt ci demo-drift
 
 # ── Dev setup ────────────────────────────────────────────────────────────────
 install:
@@ -15,8 +15,35 @@ data:
 train:
 	cd backend && uv run python -m ml.train
 
+# ── Migrations ─────────────────────────────────────────────────────────────────
+migrate:
+	cd backend && uv run --no-dev alembic upgrade head
+
+# ── Shared infra (postgres, redis, pgadmin) ───────────────────────────────────
+infra-up:
+	docker compose -f ~/infra/docker-compose.yml up -d
+
+infra-down:
+	docker compose -f ~/infra/docker-compose.yml down
+
+# ── Local dev (no Docker rebuild needed) ───────────────────────────────────────
+mlflow-up:
+	docker compose up -d mlflow
+
+dev-service:
+	cd backend && uv run uvicorn service.main:app --host 0.0.0.0 --port 8000 --reload
+
+dev-agent:
+	cd backend && uv run uvicorn agent.main:app --host 0.0.0.0 --port 8001 --reload
+
+dev-worker:
+	cd backend && uv run arq worker.main.WorkerSettings
+
+dev-dashboard:
+	cd frontend && uv run streamlit run app.py --server.port 8501
+
 # ── Docker ───────────────────────────────────────────────────────────────────
-up:
+up: infra-up
 	docker compose up -d
 
 down:
