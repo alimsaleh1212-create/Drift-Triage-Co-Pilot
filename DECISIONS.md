@@ -17,3 +17,4 @@
 | Chi2 alpha | 0.05 (warn), 0.01 (high) | p < 0.05 is the standard significance threshold; 0.01 reserves "high" for strong evidence |
 | Drift window | 500 predictions | Large enough for stable distribution estimates; small enough to catch recent changes |
 | ML split | 60/20/20 | Val set used for threshold tuning; test set held out for reference stats and fidelity replay |
+| Streamlit env vars | `os.getenv()` directly | Streamlit runs as a separate process without pydantic-settings; these are service URLs (not secrets), so the risk is low. Documented as an explicit exception to the "all config through Settings" rule. |

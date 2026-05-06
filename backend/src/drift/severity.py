@@ -1,4 +1,4 @@
-"""Aggregate drift severity across all feature tests."""
+"""Aggregate drift severity across all feature tests and versioned webhook contract."""
 
 from __future__ import annotations
 
@@ -15,6 +15,49 @@ from drift.psi import PSIResult
 Severity = Literal["low", "medium", "high"]
 
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+class WebhookPSIResult(BaseModel):
+    """PSI result within a webhook payload (contract v1)."""
+
+    feature: str
+    psi: float = Field(..., ge=0.0)
+    severity: Severity
+
+
+class WebhookChi2Result(BaseModel):
+    """Chi-squared result within a webhook payload (contract v1)."""
+
+    feature: str
+    statistic: float = Field(..., ge=0.0)
+    p_value: float = Field(..., ge=0.0, le=1.0)
+    severity: Severity
+
+
+class WebhookOutputDrift(BaseModel):
+    """Output drift within a webhook payload (contract v1)."""
+
+    psi: float = Field(..., ge=0.0)
+    severity: Severity
+
+
+class DriftWebhookPayload(BaseModel):
+    """Versioned contract: platform → agent on drift severity change.
+
+    Per CLAUDE.md §23, schema changes are breaking — version the contract.
+    The JSON Schema is mirrored in contracts/v1/drift_webhook.json.
+    """
+
+    version: Literal["v1"] = "v1"
+    report_id: str = Field(..., min_length=1)
+    model_name: str = Field(..., min_length=1)
+    model_version: int = Field(..., ge=1)
+    severity: Severity
+    psi_results: list[WebhookPSIResult]
+    chi2_results: list[WebhookChi2Result]
+    output_drift: WebhookOutputDrift
+    timestamp: datetime
+    window_size: int = Field(..., ge=0)
 
 
 class DriftReport(BaseModel):
@@ -84,4 +127,39 @@ def build_drift_report(
         output_drift=output_drift,
         severity=severity,
         window_size=window_size,
+    )
+
+
+def report_to_webhook(report: DriftReport) -> DriftWebhookPayload:
+    """Convert a DriftReport to the versioned webhook contract payload.
+
+    Per CLAUDE.md §23, the contract between platform and agent must be
+    versioned and explicit. This function handles the mapping from the
+    internal DriftReport model to the contract DriftWebhookPayload.
+    """
+    return DriftWebhookPayload(
+        version="v1",
+        report_id=report.report_id,
+        model_name=report.model_name,
+        model_version=report.model_version,
+        severity=report.severity,
+        psi_results=[
+            WebhookPSIResult(feature=r.feature, psi=r.psi, severity=r.severity)
+            for r in report.psi_results
+        ],
+        chi2_results=[
+            WebhookChi2Result(
+                feature=r.feature,
+                statistic=r.statistic,
+                p_value=r.p_value,
+                severity=r.severity,
+            )
+            for r in report.chi2_results
+        ],
+        output_drift=WebhookOutputDrift(
+            psi=report.output_drift.psi,
+            severity=report.output_drift.severity,
+        ),
+        timestamp=report.timestamp,
+        window_size=report.window_size,
     )

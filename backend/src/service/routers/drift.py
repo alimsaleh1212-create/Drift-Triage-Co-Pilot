@@ -17,7 +17,7 @@ from core.settings import get_settings
 from drift.chi2 import chi2_result
 from drift.output_drift import compute_output_drift
 from drift.psi import psi_result
-from drift.severity import DriftReport, build_drift_report
+from drift.severity import DriftWebhookPayload, DriftReport, build_drift_report, report_to_webhook
 from ml.data import CATEGORICAL_FEATURES, NUMERIC_FEATURES
 from ml.reference_stats import ReferenceStats
 from service.deps.classifier import get_ref_stats
@@ -81,7 +81,7 @@ async def _compute_drift(
         )
 
     psi_results = [
-        psi_result(feat, pd.Series(ref_stats.numeric[feat].get("values", [])), df[feat])
+        psi_result(feat, pd.Series(ref_stats.numeric[feat]["reference_values"]), df[feat])
         for feat in NUMERIC_FEATURES
         if feat in df.columns and feat in ref_stats.numeric
     ]
@@ -124,10 +124,10 @@ async def _maybe_emit_severity_webhook(
         return
 
     request.app.state.last_severity = report.severity
-    payload = report.model_dump(mode="json")
+    payload = report_to_webhook(report)
 
     try:
-        await _emit_webhook(request.app.state.http_client, payload)
+        await _emit_webhook(request.app.state.http_client, payload.model_dump(mode="json"))
         log.info(
             "drift.webhook.sent",
             report_id=report.report_id,

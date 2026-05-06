@@ -31,12 +31,44 @@ async def replay_test(
     idempotency_key: str,
     payload: dict[str, Any],
 ) -> None:
-    """Run the held-out test set through the current Production model."""
+    """Run the held-out test set through the current Production model and log metrics."""
     log.info("worker.replay_test.start", investigation_id=investigation_id)
     try:
-        # Partner implements: load model, run on test set, log metrics to MLflow
-        raise NotImplementedError("replay_test — partner implements")
-    except Exception as exc:
+        import mlflow
+        import numpy as np
+        from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+
+        from core.settings import get_settings
+        from ml.data import load_data
+        from ml.inference import predict_batch
+        from ml.register import load_model
+
+        settings = get_settings()
+        mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+
+        pipeline, threshold = load_model()
+        split = load_data()
+        proba = predict_batch(split.X_test, pipeline)
+        labels = (proba >= threshold).astype(int)
+
+        metrics = {
+            "replay_accuracy": float(accuracy_score(split.y_test, labels)),
+            "replay_f1": float(f1_score(split.y_test, labels)),
+            "replay_precision": float(precision_score(split.y_test, labels, zero_division=0)),
+            "replay_recall": float(recall_score(split.y_test, labels)),
+            "replay_auc": float(roc_auc_score(split.y_test, proba)),
+        }
+
+        client = mlflow.MlflowClient()
+        versions = client.get_latest_versions("bank-marketing-classifier", stages=["Production"])
+        if versions:
+            run_id = versions[0].run_id
+            mlflow.start_run(run_id=run_id)
+            mlflow.log_metrics(metrics)
+            mlflow.end_run()
+
+        log.info("worker.replay_test.done", investigation_id=investigation_id, **metrics)
+    except Exception:
         log.exception("worker.replay_test.error", investigation_id=investigation_id)
         if ctx.get("job_try", 1) >= 3:
             await _push_dlq(ctx, "replay_test", payload)
