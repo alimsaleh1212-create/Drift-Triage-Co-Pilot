@@ -6,12 +6,14 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.deps.db import close_db, get_session, init_db
 from agent.graph import build_graph
 from core.logging import configure_logging, get_logger
-from drift.severity import DriftReport
+from drift.severity import DriftWebhookPayload
 
 log = get_logger(__name__)
 
@@ -19,9 +21,11 @@ log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    init_db()
     app.state.graph = build_graph()
     log.info("agent.startup")
     yield
+    await close_db()
     log.info("agent.shutdown")
 
 
@@ -48,7 +52,7 @@ class HILApprovalResponse(BaseModel):
 
 @router.post("/webhook/drift", response_model=WebhookResponse)
 async def receive_drift_webhook(
-    payload: DriftReport,
+    payload: DriftWebhookPayload,
     background_tasks: BackgroundTasks,
     request: Any = None,
 ) -> WebhookResponse:
@@ -113,41 +117,30 @@ async def approve_hil(payload: HILApprovalRequest) -> HILApprovalResponse:
 
 
 @router.get("/investigations")
-async def list_investigations() -> list[dict[str, Any]]:
+async def list_investigations(session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
     """List recent investigations from Postgres."""
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
-    from core.settings import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.async_database_url)
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("SELECT id, status, summary_md, updated_at FROM investigations ORDER BY updated_at DESC LIMIT 50")
-        )
-        rows = [dict(r._mapping) for r in result]
-    await engine.dispose()
+    result = await session.execute(
+        text("SELECT id, status, summary_md, updated_at FROM investigations ORDER BY updated_at DESC LIMIT 50")
+    )
+    rows = [dict(r._mapping) for r in result]
     return rows
 
 
 @router.get("/investigations/{investigation_id}")
-async def get_investigation(investigation_id: str) -> dict[str, Any]:
+async def get_investigation(
+    investigation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
     """Return a single investigation by ID."""
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
-    from core.settings import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.async_database_url)
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("SELECT * FROM investigations WHERE id = :id"),
-            {"id": investigation_id},
-        )
-        row = result.fetchone()
-    await engine.dispose()
+    result = await session.execute(
+        text("SELECT * FROM investigations WHERE id = :id"),
+        {"id": investigation_id},
+    )
+    row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Investigation not found")
     return dict(row._mapping)

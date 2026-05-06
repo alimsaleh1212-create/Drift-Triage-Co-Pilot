@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from drift.chi2 import chi2_result
 from drift.psi import compute_psi, psi_result
 from drift.severity import aggregate_severity
 
@@ -58,3 +59,18 @@ def test_severity_all_low() -> None:
     chi2 = [Chi2Result(feature="b", statistic=2.0, p_value=0.3, dof=5, severity="low", reference_n=100, current_n=100)]
     od = OutputDriftResult(psi=0.01, severity="low", reference_class_1_rate=0.1, current_class_1_rate=0.1, current_n=100)
     assert aggregate_severity(psi, chi2, od) == "low"
+
+
+def test_chi2_result_accepts_alpha_parameter() -> None:
+    ref_freqs = {"admin.": 0.25, "blue-collar": 0.22, "technician": 0.16}
+    current = pd.Series(["admin."] * 50 + ["blue-collar"] * 40 + ["technician"] * 10)
+    result = chi2_result("job", ref_freqs, current, alpha=0.05)
+    assert result.feature == "job"
+    assert result.current_n == 100
+
+
+def test_chi2_result_high_severity_with_low_alpha() -> None:
+    ref_freqs = {"a": 0.5, "b": 0.5}
+    current = pd.Series(["a"] * 90 + ["b"] * 10)
+    result = chi2_result("feat", ref_freqs, current, alpha=0.01)
+    assert result.severity in ("low", "medium", "high")

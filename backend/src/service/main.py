@@ -7,6 +7,7 @@ from typing import AsyncIterator
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.logging import configure_logging, get_logger
 from core.settings import get_settings
@@ -22,6 +23,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Load singletons on startup; dispose on shutdown."""
     configure_logging()
     settings = get_settings()
+
+    # Database — engine and session factory created once per process
+    engine = create_async_engine(settings.async_database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    app.state.engine = engine
+    app.state.SessionLocal = SessionLocal
 
     # ML artefacts — loaded once, reused per request
     pipeline, threshold = load_model()
@@ -41,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     await app.state.http_client.aclose()
+    await engine.dispose()
     log.info("service.shutdown")
 
 

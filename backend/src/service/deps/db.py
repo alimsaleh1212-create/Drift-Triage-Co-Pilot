@@ -1,26 +1,31 @@
-"""Database session dependency for the model service."""
+"""Database session dependency for the model service.
+
+Engine and session factory are created during lifespan, stored on
+``app.state``, and injected via ``Depends()`` — no module-level globals.
+"""
 
 from __future__ import annotations
 
 from typing import AsyncIterator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.settings import get_settings
-
-_engine = create_async_engine(
-    get_settings().async_database_url,
-    pool_pre_ping=True,
-)
-_SessionLocal = async_sessionmaker(_engine, expire_on_commit=False)
+from ml.reference_stats import ReferenceStats
 
 
-class Base(DeclarativeBase):
-    pass
+async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
+    """Yield an async DB session scoped to the request.
 
-
-async def get_session() -> AsyncIterator[AsyncSession]:
-    """Yield an async DB session scoped to the request."""
-    async with _SessionLocal() as session:
+    Uses the ``SessionLocal`` factory attached to ``app.state`` during
+    lifespan startup.  FastAPI manages the session lifecycle.
+    """
+    session: AsyncSession = request.app.state.SessionLocal()
+    try:
         yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
