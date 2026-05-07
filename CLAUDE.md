@@ -6,7 +6,7 @@ AIE Coding Guidelines, and Week 4 Code Review Lessons Learned. Follow
 automatically on every file you create or modify.
 
 > **Engineering is the discipline of writing code that other people can change
-> without fear.** — Hasan, Companion Guide
+> without fear.**
 
 ---
 
@@ -52,7 +52,7 @@ For multi-step tasks, state a brief plan up front:
 2. [step] → verify: [check]
 ```
 
-Each stage in `plan.md` ends with an explicit validation gate. Do not advance
+Each stage in `CLAUDE.md` ends with an explicit validation gate. Do not advance
 until the gate is green.
 
 ---

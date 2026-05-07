@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[".env", "../.env"],  # works from backend/ or project root
         env_file_encoding="utf-8",
         extra="forbid",
     )
@@ -77,8 +77,17 @@ class Settings(BaseSettings):
 
     @property
     def sync_database_url(self) -> str:
+        # psycopg (v3) — already installed via langgraph-checkpoint-postgres
         return (
-            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
+            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def checkpoint_database_url(self) -> str:
+        # Plain psycopg3 connection string for AsyncPostgresSaver (no SQLAlchemy prefix)
+        return (
+            f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 

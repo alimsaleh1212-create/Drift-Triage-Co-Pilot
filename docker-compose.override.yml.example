@@ -1,0 +1,27 @@
+# docker-compose.override.yml.example
+# Copy to docker-compose.override.yml and uncomment for dev mode with bind mounts + live reload.
+# Docker Compose auto-merges docker-compose.override.yml (no flag needed).
+#
+# services:
+#   service:
+#     volumes:
+#       - ./backend/src:/app/src
+#     environment:
+#       PYTHONPATH: /app/src
+#     command: ["uv", "run", "--no-dev", "uvicorn", "service.main:app",
+#               "--host", "0.0.0.0", "--port", "8000", "--reload"]
+#
+#   agent:
+#     volumes:
+#       - ./backend/src:/app/src
+#     environment:
+#       PYTHONPATH: /app/src
+#     command: ["uv", "run", "--no-dev", "uvicorn", "agent.main:app",
+#               "--host", "0.0.0.0", "--port", "8001", "--reload"]
+#
+#   worker:
+#     volumes:
+#       - ./backend/src:/app/src
+#     environment:
+#       PYTHONPATH: /app/src
+#     command: ["uv", "run", "--no-dev", "arq", "worker.main.WorkerSettings"]

@@ -401,16 +401,8 @@ action_node = action_agent_node
 comms_node = comms_agent_node
 
 
-def build_graph() -> Any:
-    """Construct the LangGraph supervisor graph with Postgres checkpointer."""
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-    from core.settings import get_settings
-
-    settings = get_settings()
-    checkpointer = AsyncPostgresSaver.from_conn_string(settings.sync_database_url)
-    checkpointer.setup()
-
+def build_graph(checkpointer: Any) -> Any:
+    """Construct the LangGraph supervisor graph with a pre-initialised checkpointer."""
     graph = StateGraph(AgentState)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("triage_agent", triage_agent_node)
