@@ -39,7 +39,6 @@ resources/
 
 # Docker
 *.tar
-docker-compose.override.yml
 
 # OS
 .DS_Store

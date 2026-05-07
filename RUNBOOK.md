@@ -2,6 +2,51 @@
 
 ## Common Operations
 
+### Demo batch injection
+
+Generate four Friday demo batches from the original UCI Bank Marketing
+`bank-additional-full.csv`:
+
+```bash
+python scripts/generate_demo_batches.py
+```
+
+The generated files are written to:
+
+- `data/demo_batches/normal_2000.csv`
+- `data/demo_batches/replay_drift_2000.csv`
+- `data/demo_batches/retrain_drift_2000.csv`
+- `data/demo_batches/rollback_drift_2000.csv`
+
+Inject a batch through the real prediction API:
+
+```bash
+python scripts/inject_demo_batch.py normal --n 2000
+python scripts/inject_demo_batch.py replay_drift --n 2000
+python scripts/inject_demo_batch.py retrain_drift --n 2000
+python scripts/inject_demo_batch.py rollback_drift --n 2000
+```
+
+Use `--service-url http://localhost:8000` when the service is running locally,
+or set `MODEL_SERVICE_URL`, `SERVICE_URL`, or `API_BASE_URL`.
+
+Expected demo behavior:
+
+- `normal`: low/no drift, monitor/no action.
+- `replay_drift`: mild/moderate drift, expected `replay_test`.
+- `retrain_drift`: strong feature drift, expected `retrain`.
+- `rollback_drift`: severe abnormal/output shift, expected production-touching
+  action requiring HIL approval.
+
+The data comes from the original CSV, not from an LLM. The injector removes
+`y` and `duration` from prediction requests and sends rows to
+`POST /api/v1/predict`; it does not insert directly into Postgres.
+
+For reliable scenario isolation, run each scenario on a clean database or set
+the service drift window to the injected batch size. The current schema does
+not tag demo predictions, so the demo scripts intentionally avoid deleting or
+mutating database rows.
+
 ### Full restart (clean slate)
 ```bash
 docker compose down -v      # removes volumes

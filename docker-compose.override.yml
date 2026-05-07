@@ -1,0 +1,36 @@
+# docker-compose.override.yml
+# Dev-mode overlay: bind-mounted backend source + live reload.
+# Docker Compose auto-merges this file with docker-compose.yaml.
+
+services:
+  migrate:
+    image: drift-triage-co-pilot-service:latest
+    volumes:
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+      - ./backend/migrations:/app/migrations:ro
+    command: ["uv", "run", "--no-dev", "alembic", "upgrade", "head"]
+
+  service:
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+      - ./backend/migrations:/app/migrations:ro
+    environment:
+      PYTHONPATH: /app/src
+    command: ["uv", "run", "--no-dev", "uvicorn", "service.main:app",
+              "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  agent:
+    volumes:
+      - ./backend/src:/app/src
+    environment:
+      PYTHONPATH: /app/src
+    command: ["uv", "run", "--no-dev", "uvicorn", "agent.main:app",
+              "--host", "0.0.0.0", "--port", "8001", "--reload"]
+
+  worker:
+    volumes:
+      - ./backend/src:/app/src
+    environment:
+      PYTHONPATH: /app/src
+    command: ["uv", "run", "--no-dev", "arq", "worker.main.WorkerSettings"]
