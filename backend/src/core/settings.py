@@ -20,10 +20,10 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=[".env", "../.env"],  # works from backend/ or project root
-        env_file_encoding="utf-8",
-        extra="forbid",
-    )
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",
+)
 
     # ── Secrets (from .env, gitignored) ──────────────────────────────
     google_api_key: str = Field(..., min_length=1)

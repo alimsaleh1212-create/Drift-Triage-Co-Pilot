@@ -5,19 +5,24 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
 import pandas as pd
 from cachetools import TTLCache
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-from ml.data import CATEGORICAL_FEATURES, NUMERIC_FEATURES
-import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 from core.logging import get_logger
 from core.settings import get_settings
 from drift.chi2 import chi2_result
 from drift.output_drift import compute_output_drift
 from drift.psi import psi_result
-from drift.severity import DriftWebhookPayload, DriftReport, build_drift_report, report_to_webhook
+from drift.severity import DriftReport, build_drift_report, report_to_webhook
 from ml.data import CATEGORICAL_FEATURES, NUMERIC_FEATURES
 from ml.reference_stats import ReferenceStats
 from service.deps.classifier import get_ref_stats
@@ -38,7 +43,7 @@ async def _fetch_rolling_window(
 
     result = await session.execute(
         text(
-            "SELECT features FROM predictions "
+            "SELECT features, label FROM predictions "
             "ORDER BY created_at DESC LIMIT :window"
         ),
         {"window": window_size},
@@ -48,7 +53,12 @@ async def _fetch_rolling_window(
         return pd.DataFrame()
     import json
 
-    records = [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+    records = []
+    for row in rows:
+        features = (
+            json.loads(row.features) if isinstance(row.features, str) else row.features
+        )
+        records.append({**features, "label": row.label})
     return pd.DataFrame(records)
 
 
@@ -65,6 +75,7 @@ async def _compute_drift(
     if df.empty:
         # Not enough data yet — return a low-severity placeholder
         from drift.output_drift import OutputDriftResult
+
         return build_drift_report(
             model_name=model_name,
             model_version=model_version,
@@ -81,7 +92,9 @@ async def _compute_drift(
         )
 
     psi_results = [
-        psi_result(feat, pd.Series(ref_stats.numeric[feat]["reference_values"]), df[feat])
+        psi_result(
+            feat, pd.Series(ref_stats.numeric[feat]["reference_values"]), df[feat]
+        )
         for feat in NUMERIC_FEATURES
         if feat in df.columns and feat in ref_stats.numeric
     ]
@@ -115,9 +128,7 @@ async def _emit_webhook(client: httpx.AsyncClient, payload: dict[str, Any]) -> N
     r.raise_for_status()
 
 
-async def _maybe_emit_severity_webhook(
-    request: Request, report: DriftReport
-) -> None:
+async def _maybe_emit_severity_webhook(request: Request, report: DriftReport) -> None:
     """Emit webhook to agent if drift severity has changed since last report."""
     last = request.app.state.last_severity
     if last == report.severity:
@@ -127,7 +138,9 @@ async def _maybe_emit_severity_webhook(
     payload = report_to_webhook(report)
 
     try:
-        await _emit_webhook(request.app.state.http_client, payload.model_dump(mode="json"))
+        await _emit_webhook(
+            request.app.state.http_client, payload.model_dump(mode="json")
+        )
         log.info(
             "drift.webhook.sent",
             report_id=report.report_id,

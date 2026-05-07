@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -69,11 +70,11 @@ async def _log_prediction(
     await session.execute(
         text(
             "INSERT INTO predictions (id, features, label, probability, created_at) "
-            "VALUES (:id, :features::jsonb, :label, :probability, now())"
+            "VALUES (:id, CAST(:features AS jsonb), :label, :probability, now())"
         ),
         {
             "id": prediction_id,
-            "features": str(features),
+            "features": json.dumps(features),
             "label": label,
             "probability": probability,
         },
@@ -107,9 +108,7 @@ async def predict(
     feature_dict = _prepare_features(payload)
     df = pd.DataFrame([feature_dict])
 
-    proba = await asyncio.to_thread(
-        lambda: float(predict_batch(df, classifier)[0])
-    )
+    proba = await asyncio.to_thread(lambda: float(predict_batch(df, classifier)[0]))
     label = int(proba >= threshold)
     prediction_id = str(uuid4())
 

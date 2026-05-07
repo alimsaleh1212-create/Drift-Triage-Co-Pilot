@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -35,11 +36,13 @@ def client():
         dataset_hash="test_hash",
     )
 
-    with patch("service.main.get_settings") as mock_settings, \
-         patch("service.main.load_model") as mock_load, \
-         patch("service.main.load_reference_stats", return_value=ref_stats), \
-         patch("service.main.create_async_engine") as mock_create_engine, \
-         patch("service.main.async_sessionmaker") as mock_sessionmaker:
+    with (
+        patch("service.main.get_settings") as mock_settings,
+        patch("service.main.load_model") as mock_load,
+        patch("service.main.load_reference_stats", return_value=ref_stats),
+        patch("service.main.create_async_engine") as mock_create_engine,
+        patch("service.main.async_sessionmaker") as mock_sessionmaker,
+    ):
         from core.settings import Settings
 
         mock_settings.return_value = Settings(
@@ -129,3 +132,31 @@ def test_predict_missing_field_returns_422(client):
     }
     response = client.post("/api/v1/predict", json=payload)
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_log_prediction_writes_valid_jsonb_payload() -> None:
+    from service.routers.prediction import _log_prediction
+
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.commit = AsyncMock()
+
+    await _log_prediction(
+        session,
+        prediction_id="prediction-1",
+        features={"job": "admin.", "age": 35, "emp.var.rate": -1.8},
+        label=1,
+        probability=0.75,
+    )
+
+    statement, params = session.execute.await_args.args
+    assert "CAST(:features AS jsonb)" in str(statement)
+    assert json.loads(params["features"]) == {
+        "job": "admin.",
+        "age": 35,
+        "emp.var.rate": -1.8,
+    }
+    assert params["label"] == 1
+    assert params["probability"] == 0.75
+    session.commit.assert_awaited_once()

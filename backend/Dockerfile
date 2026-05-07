@@ -24,6 +24,14 @@ COPY src/ src/
 
 RUN uv sync --no-dev
 
+# ── migrations ─────────────────────────────────────────────────────────────
+FROM base AS migrate
+
+COPY alembic.ini .
+COPY migrations/ migrations/
+
+CMD ["uv", "run", "--no-dev", "alembic", "upgrade", "head"]
+
 # ── service ────────────────────────────────────────────────────────────────
 FROM base AS service
 

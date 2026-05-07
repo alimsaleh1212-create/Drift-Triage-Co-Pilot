@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -44,9 +47,27 @@ def test_severity_max_aggregation() -> None:
     from drift.output_drift import OutputDriftResult
     from drift.psi import PSIResult
 
-    psi = [PSIResult(feature="a", psi=0.05, severity="low", reference_n=100, current_n=100)]
-    chi2 = [Chi2Result(feature="b", statistic=20.0, p_value=0.001, dof=5, severity="high", reference_n=100, current_n=100)]
-    od = OutputDriftResult(psi=0.08, severity="low", reference_class_1_rate=0.1, current_class_1_rate=0.1, current_n=100)
+    psi = [
+        PSIResult(feature="a", psi=0.05, severity="low", reference_n=100, current_n=100)
+    ]
+    chi2 = [
+        Chi2Result(
+            feature="b",
+            statistic=20.0,
+            p_value=0.001,
+            dof=5,
+            severity="high",
+            reference_n=100,
+            current_n=100,
+        )
+    ]
+    od = OutputDriftResult(
+        psi=0.08,
+        severity="low",
+        reference_class_1_rate=0.1,
+        current_class_1_rate=0.1,
+        current_n=100,
+    )
     assert aggregate_severity(psi, chi2, od) == "high"
 
 
@@ -55,9 +76,27 @@ def test_severity_all_low() -> None:
     from drift.output_drift import OutputDriftResult
     from drift.psi import PSIResult
 
-    psi = [PSIResult(feature="a", psi=0.02, severity="low", reference_n=100, current_n=100)]
-    chi2 = [Chi2Result(feature="b", statistic=2.0, p_value=0.3, dof=5, severity="low", reference_n=100, current_n=100)]
-    od = OutputDriftResult(psi=0.01, severity="low", reference_class_1_rate=0.1, current_class_1_rate=0.1, current_n=100)
+    psi = [
+        PSIResult(feature="a", psi=0.02, severity="low", reference_n=100, current_n=100)
+    ]
+    chi2 = [
+        Chi2Result(
+            feature="b",
+            statistic=2.0,
+            p_value=0.3,
+            dof=5,
+            severity="low",
+            reference_n=100,
+            current_n=100,
+        )
+    ]
+    od = OutputDriftResult(
+        psi=0.01,
+        severity="low",
+        reference_class_1_rate=0.1,
+        current_class_1_rate=0.1,
+        current_n=100,
+    )
     assert aggregate_severity(psi, chi2, od) == "low"
 
 
@@ -74,3 +113,23 @@ def test_chi2_result_high_severity_with_low_alpha() -> None:
     current = pd.Series(["a"] * 90 + ["b"] * 10)
     result = chi2_result("feat", ref_freqs, current, alpha=0.01)
     assert result.severity in ("low", "medium", "high")
+
+
+@pytest.mark.asyncio
+async def test_fetch_rolling_window_includes_prediction_labels() -> None:
+    from service.routers.drift import _fetch_rolling_window
+
+    result = MagicMock()
+    result.fetchall.return_value = [
+        SimpleNamespace(features={"age": 35, "job": "admin."}, label=1),
+        SimpleNamespace(features='{"age": 41, "job": "technician"}', label=0),
+    ]
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=result)
+
+    df = await _fetch_rolling_window(session, model_name="model", window_size=500)
+
+    assert df[["age", "job", "label"]].to_dict(orient="records") == [
+        {"age": 35, "job": "admin.", "label": 1},
+        {"age": 41, "job": "technician", "label": 0},
+    ]
