@@ -1,0 +1,2 @@
+- combine docker compose to have 1 clean complete docker compose
+- perform unit tests and mock tests to test all app functionalities
