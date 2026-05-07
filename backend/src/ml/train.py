@@ -37,7 +37,7 @@ from core.settings import get_settings
 from ml.data import DataSplit, load_data
 from ml.pipeline import build_pipeline
 from ml.reference_stats import compute_reference_stats
-from ml.register import register_model
+from ml.register import MODEL_NAME, register_model
 from ml.threshold import find_threshold
 
 log = structlog.get_logger(__name__)
@@ -265,7 +265,7 @@ def _write_training_report(result: TrainResult, settings: object) -> Path:
 def _write_threshold_config(result: TrainResult, settings: object) -> Path:
     """Write the operating threshold configuration JSON."""
     threshold_artifact = {
-        "registered_model_name": "bank-marketing-classifier",
+        "registered_model_name": MODEL_NAME,
         "selected_model": result.model_name,
         "operating_threshold": result.threshold,
         "rule": f"highest threshold where validation recall >= {settings.min_recall}",
@@ -286,7 +286,7 @@ def _write_model_card(result: TrainResult, settings: object) -> Path:
 
     env_meta = _environment_fingerprint()
     env_json = json.dumps(env_meta, indent=2)
-    model_name = "bank-marketing-classifier"
+    model_name = MODEL_NAME
 
     card = f"""\
 # Model Card — {model_name}
@@ -388,7 +388,7 @@ def main() -> None:
 
     MODEL_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     artifact = {
-        "registered_model_name": "bank-marketing-classifier",
+        "registered_model_name": MODEL_NAME,
         "selected_model": result.model_name,
         "pipeline": result.pipeline,
         "threshold": result.threshold,

@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-MODEL_NAME = "bank-marketing-classifier"
+MODEL_NAME = "drift-triage-classifier"
 
 REPORT_OUTPUT_PATH = Path("artifacts/reports/training_report.json")
 THRESHOLD_OUTPUT_PATH = Path("artifacts/reports/operating_threshold.json")

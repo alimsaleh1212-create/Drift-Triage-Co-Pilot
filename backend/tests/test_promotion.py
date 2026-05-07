@@ -15,7 +15,7 @@ def _make_model_version(stage: str, tags: dict | None = None):
     version.current_stage = stage
     version.version = "2"
     version.tags = tags or {}
-    version.source = "models:/bank-marketing-classifier/2"
+    version.source = "models:/drift-triage-classifier/2"
     version.run_id = "test_run_id"
     return version
 
@@ -62,7 +62,7 @@ def test_promotion_rejects_wrong_api_key(client):
     response = client.post(
         "/api/v1/promotion/promote",
         json={
-            "model_name": "bank-marketing-classifier",
+            "model_name": "drift-triage-classifier",
             "target_version": 2,
             "investigation_id": "inv-1",
             "hil_approval_id": "hil-1",
@@ -76,7 +76,7 @@ def test_promotion_rejects_missing_api_key(client):
     response = client.post(
         "/api/v1/promotion/promote",
         json={
-            "model_name": "bank-marketing-classifier",
+            "model_name": "drift-triage-classifier",
             "target_version": 2,
             "investigation_id": "inv-1",
             "hil_approval_id": "hil-1",
@@ -98,7 +98,7 @@ def test_promotion_rejects_low_recall(client):
         response = client.post(
             "/api/v1/promotion/promote",
             json={
-                "model_name": "bank-marketing-classifier",
+                "model_name": "drift-triage-classifier",
                 "target_version": 2,
                 "investigation_id": "inv-1",
                 "hil_approval_id": "hil-1",
@@ -122,7 +122,7 @@ def test_promotion_rejects_lower_auc(client):
         response = client.post(
             "/api/v1/promotion/promote",
             json={
-                "model_name": "bank-marketing-classifier",
+                "model_name": "drift-triage-classifier",
                 "target_version": 2,
                 "investigation_id": "inv-1",
                 "hil_approval_id": "hil-1",
@@ -144,7 +144,7 @@ def test_drift_webhook_payload_schema():
     payload = DriftWebhookPayload(
         version="v1",
         report_id="rpt-123",
-        model_name="bank-marketing-classifier",
+        model_name="drift-triage-classifier",
         model_version=1,
         severity="high",
         psi_results=[WebhookPSIResult(feature="euribor3m", psi=0.35, severity="high")],

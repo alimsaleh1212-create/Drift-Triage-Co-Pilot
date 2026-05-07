@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from core.logging import configure_logging, get_logger
 from core.settings import get_settings
 from ml.reference_stats import load_reference_stats
-from ml.register import load_model
+from ml.register import MODEL_NAME, load_model
 from service.routers import drift, prediction, promotion
 
 log = get_logger(__name__)
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.classifier = pipeline
     app.state.threshold = threshold
     app.state.ref_stats = ref_stats
-    app.state.model_name = "drift-triage-classifier"
+    app.state.model_name = MODEL_NAME
     # Last emitted severity for change-detection (start as None)
     app.state.last_severity = None
 

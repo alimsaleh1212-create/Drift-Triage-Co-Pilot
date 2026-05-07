@@ -111,7 +111,7 @@ def test_webhook_payload_valid() -> None:
     payload = DriftWebhookPayload(
         version="v1",
         report_id="rpt-abc",
-        model_name="bank-marketing-classifier",
+        model_name="drift-triage-classifier",
         model_version=1,
         severity="high",
         psi_results=[WebhookPSIResult(feature="euribor3m", psi=0.35, severity="high")],

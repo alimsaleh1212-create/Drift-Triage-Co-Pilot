@@ -41,7 +41,7 @@ async def replay_test(
         from core.settings import get_settings
         from ml.data import load_data
         from ml.inference import predict_batch
-        from ml.register import load_model
+        from ml.register import MODEL_NAME, load_model
 
         settings = get_settings()
         mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
@@ -60,7 +60,7 @@ async def replay_test(
         }
 
         client = mlflow.MlflowClient()
-        versions = client.get_latest_versions("bank-marketing-classifier", stages=["Production"])
+        versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
         if versions:
             run_id = versions[0].run_id
             mlflow.start_run(run_id=run_id)
@@ -116,6 +116,8 @@ async def rollback(
     try:
         import httpx
 
+        from ml.register import MODEL_NAME
+
         settings = get_settings()
         target_version = payload.get("model_version")
         hil_approval_id = payload.get("hil_approval_id", "")
@@ -124,7 +126,7 @@ async def rollback(
                 f"{settings.service_url}/api/v1/promotion/promote",
                 headers={"X-Promotion-Key": settings.promotion_api_key},
                 json={
-                    "model_name": "drift-triage-classifier",
+                    "model_name": MODEL_NAME,
                     "target_version": target_version,
                     "investigation_id": investigation_id,
                     "hil_approval_id": hil_approval_id,

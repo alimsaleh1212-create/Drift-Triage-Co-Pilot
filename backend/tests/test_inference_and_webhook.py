@@ -45,7 +45,7 @@ class TestWebhookConversion:
         from datetime import datetime, timezone
 
         return DriftReport(
-            model_name="bank-marketing-classifier",
+            model_name="drift-triage-classifier",
             model_version=1,
             psi_results=[
                 PSIResult(feature="euribor3m", psi=0.35, severity="high", reference_n=1000, current_n=500)
@@ -67,7 +67,7 @@ class TestWebhookConversion:
         webhook = report_to_webhook(report)
         assert isinstance(webhook, DriftWebhookPayload)
         assert webhook.version == "v1"
-        assert webhook.model_name == "bank-marketing-classifier"
+        assert webhook.model_name == "drift-triage-classifier"
         assert webhook.severity == "high"
         assert len(webhook.psi_results) == 1
         assert webhook.psi_results[0].feature == "euribor3m"
