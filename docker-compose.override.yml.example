@@ -1,6 +1,10 @@
 # docker-compose.override.yml.example
-# Copy to docker-compose.override.yml and uncomment for dev mode with bind mounts + live reload.
-# Docker Compose auto-merges docker-compose.override.yml (no flag needed).
+# Copy to docker-compose.override.yml for dev mode: bind-mounted src + live reload.
+# Docker Compose auto-merges docker-compose.override.yml — no extra flags needed.
+#
+# Usage:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up -d
 #
 # services:
 #   service:

@@ -1,40 +1,110 @@
-# docker-compose.yaml — Drift Triage Co-Pilot stack (MLflow + services only)
+# docker-compose.yaml — Drift Triage Co-Pilot — self-contained stack
 #
-# Postgres, Redis, pgAdmin run in shared infra at ~/infra/
-# Start infra first:  docker compose -f ~/infra/docker-compose.yml up -d
+# Two modes:
 #
-# Services:
-#   mlflow      — MLflow tracking server (Postgres backend, local artifact store).
-#   service     — FastAPI model service (predict, drift, promotion).
-#   agent       — FastAPI agent service (webhook, HIL, investigations).
-#   worker      — arq async worker (replay_test, retrain, rollback).
-#   dashboard   — Streamlit dashboard.
+#   Fresh machine (no shared infra running):
+#     make up-full        →  docker compose --profile infra up -d
+#                            starts postgres + redis + pgadmin + all app services
 #
-# Quick start:
-#   docker compose -f ~/infra/docker-compose.yml up -d
-#   cp .env.example .env  # fill GOOGLE_API_KEY, POSTGRES_PASSWORD, PROMOTION_API_KEY
-#   make train            # register model, write artifacts/
-#   docker compose up -d
+#   Shared infra already running (postgres/redis from ~/infra or another project):
+#     make up             →  docker compose up -d
+#                            starts mlflow + app services only, joins existing postgres/redis
+#
+# Postgres/redis/pgadmin carry profiles: [infra] — skipped by default compose up.
+# When infra is running, app service depends_on resolves against existing containers.
+# dev_network is declared external — created by make up/up-full if missing.
+#
+# Ports:
+#   5432 — Postgres   5000 — MLflow    8000 — Model service
+#   6379 — Redis      8888 — pgAdmin   8001 — Agent
+#   8501 — Dashboard
 
 services:
 
-  # ─── MLflow tracking server ────────────────────────────────────────────────
+  # ─── PostgreSQL 16 + pgvector ─────────────────────────────────────────────
+  # profile: infra — only started by make up-full / docker compose --profile infra up
+  # Same container name + volume as ~/infra — shared across projects.
+  postgres:
+    profiles: ["infra"]
+    image: pgvector/pgvector:pg16
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dev_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis 7 ─────────────────────────────────────────────────────────────
+  # profile: infra — same logic as postgres above.
+  redis:
+    profiles: ["infra"]
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - dev_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── pgAdmin 4 ───────────────────────────────────────────────────────────
+  # profile: infra — optional DB UI at http://localhost:8888
+  pgadmin:
+    profiles: ["infra"]
+    image: dpage/pgadmin4:8.13
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@dev.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-changeme}
+    ports:
+      - "8888:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - dev_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ─── MLflow tracking server ───────────────────────────────────────────────
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.21.3
     container_name: dt_mlflow
     restart: unless-stopped
     networks:
-      - dt_network
+      - dev_network
     ports:
       - "5000:5000"
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drift_triage}
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drift_triage}
     volumes:
       - mlflow_data:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
     command: >
       sh -c "pip install -q psycopg2-binary &&
       mlflow server
-      --backend-store-uri postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drift_triage}
+      --backend-store-uri postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drift_triage}
       --artifacts-destination /mlflow/artifacts
       --serve-artifacts
       --host 0.0.0.0
@@ -62,10 +132,16 @@ services:
     ports:
       - "8000:8000"
     networks:
-      - dt_network
+      - dev_network
     volumes:
       - ./backend/artifacts:/app/artifacts:ro
     depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+        required: false
       mlflow:
         condition: service_healthy
     healthcheck:
@@ -90,8 +166,14 @@ services:
     ports:
       - "8001:8001"
     networks:
-      - dt_network
+      - dev_network
     depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+        required: false
       mlflow:
         condition: service_healthy
     healthcheck:
@@ -114,9 +196,16 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       SERVICE_URL: http://service:8000
     networks:
-      - dt_network
+      - dev_network
     volumes:
       - ./backend/artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+        required: false
 
   # ─── Streamlit dashboard ──────────────────────────────────────────────────
   dashboard:
@@ -130,7 +219,7 @@ services:
     ports:
       - "8501:8501"
     networks:
-      - dt_network
+      - dev_network
     depends_on:
       service:
         condition: service_healthy
@@ -138,9 +227,14 @@ services:
         condition: service_healthy
 
 networks:
-  dt_network:
+  # External — shared across all projects on this machine.
+  # Created automatically by make up / make up-full if it doesn't exist yet.
+  dev_network:
     external: true
     name: dev_network
 
 volumes:
-  mlflow_data:
+  postgres_data:    # shared with ~/infra — same volume, same data
+  redis_data:       # shared with ~/infra
+  pgadmin_data:     # shared with ~/infra
+  mlflow_data:      # project-local — MLflow artifacts
