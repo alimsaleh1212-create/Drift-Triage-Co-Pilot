@@ -72,6 +72,8 @@ async def receive_drift_webhook(
         report_id=payload.report_id,
     )
 
+    await _create_investigation(investigation_id, payload)
+
     async def _run_graph() -> None:
         graph = app.state.graph
         initial_state = {
@@ -96,6 +98,40 @@ async def receive_drift_webhook(
 
     background_tasks.add_task(_run_graph)
     return WebhookResponse(investigation_id=investigation_id, status="open")
+
+
+def _drift_event_summary(payload: DriftWebhookPayload) -> str:
+    """Build the initial dashboard summary for a newly opened investigation."""
+    return (
+        "Drift event received: "
+        f"severity={payload.severity}, "
+        f"model_name={payload.model_name}, "
+        f"model_version={payload.model_version}, "
+        f"report_id={payload.report_id}"
+    )
+
+
+async def _create_investigation(
+    investigation_id: str,
+    payload: DriftWebhookPayload,
+) -> None:
+    """Persist the investigation row before graph/HIL work starts."""
+    from sqlalchemy import text
+
+    async with get_session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO investigations "
+                "(id, status, summary_md, created_at, updated_at) "
+                "VALUES (:id, :status, :summary_md, now(), now())"
+            ),
+            {
+                "id": investigation_id,
+                "status": "open",
+                "summary_md": _drift_event_summary(payload),
+            },
+        )
+        await session.commit()
 
 
 @router.post("/hil/approve", response_model=HILApprovalResponse)
@@ -148,6 +184,27 @@ async def approve_hil(payload: HILApprovalRequest) -> HILApprovalResponse:
         decision=payload.decision,
         status="resumed" if payload.decision == "approved" else "rejected",
     )
+
+
+@router.get("/hil/approvals")
+async def list_hil_approvals() -> list[dict[str, Any]]:
+    """List pending HIL approvals with their real approval IDs."""
+    from sqlalchemy import text
+
+    async with get_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT "
+                "h.id, h.investigation_id, h.action, h.rationale, h.model_version, "
+                "h.status, h.created_at, i.summary_md, i.updated_at "
+                "FROM hil_approvals h "
+                "JOIN investigations i ON i.id = h.investigation_id "
+                "WHERE h.status = 'pending' "
+                "ORDER BY h.created_at DESC "
+                "LIMIT 50"
+            )
+        )
+        return [dict(r._mapping) for r in result]
 
 
 @router.get("/investigations")
