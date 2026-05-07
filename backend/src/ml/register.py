@@ -101,9 +101,12 @@ def register_model(
 
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     experiment_name = "week5-bank-marketing"
+    client = MlflowClient()
     existing = mlflow.get_experiment_by_name(experiment_name)
     if existing is None:
         mlflow.create_experiment(experiment_name)
+    elif existing.lifecycle_stage == "deleted":
+        client.restore_experiment(existing.experiment_id)
     mlflow.set_experiment(experiment_name)
 
     pipeline = result.pipeline
@@ -251,9 +254,8 @@ def load_model(model_name: str = MODEL_NAME) -> tuple[Pipeline, float]:
     version = versions[0]
     pipeline = mlflow.sklearn.load_model(version.source)
 
-    threshold_tag = client.get_model_version_tag(
-        model_name, version.version, "operating_threshold"
-    )
+    version_detail = client.get_model_version(model_name, version.version)
+    threshold_tag = version_detail.tags.get("operating_threshold")
     if threshold_tag is None:
         run = client.get_run(version.run_id)
         threshold_tag = run.data.params.get("operating_threshold")
