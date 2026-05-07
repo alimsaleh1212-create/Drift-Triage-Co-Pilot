@@ -132,28 +132,37 @@ elif page == "Queue":
 # ── HIL Inbox ───────────────────────────────────────────────────────────────
 elif page == "HIL Inbox":
     st.title("Human-in-the-Loop Inbox")
-    investigations = _get(f"{AGENT_URL}/investigations") or []
-    pending = [i for i in investigations if i.get("status") == "awaiting_approval"]
+    pending = _get(f"{AGENT_URL}/hil/approvals") or []
 
     if not pending:
         st.success("No pending approvals.")
     else:
-        for inv in pending:
-            st.warning(f"**Approval required** — Investigation `{inv['id'][:8]}…`")
-            st.markdown(inv.get("summary_md") or "")
+        for approval in pending:
+            investigation_id = approval["investigation_id"]
+            approval_id = approval["id"]
+            st.warning(f"**Approval required** — Investigation `{investigation_id[:8]}…`")
+            st.markdown(approval.get("summary_md") or approval.get("rationale") or "")
             col_a, col_r = st.columns(2)
             with col_a:
-                if st.button("✅ Approve", key=f"approve_{inv['id']}"):
+                if st.button("✅ Approve", key=f"approve_{approval_id}"):
                     _post(
                         f"{AGENT_URL}/hil/approve",
-                        {"investigation_id": inv["id"], "hil_approval_id": "", "decision": "approved"},
+                        {
+                            "investigation_id": investigation_id,
+                            "hil_approval_id": approval_id,
+                            "decision": "approved",
+                        },
                     )
                     st.success("Approved — agent resuming.")
             with col_r:
-                if st.button("❌ Reject", key=f"reject_{inv['id']}"):
+                if st.button("❌ Reject", key=f"reject_{approval_id}"):
                     _post(
                         f"{AGENT_URL}/hil/approve",
-                        {"investigation_id": inv["id"], "hil_approval_id": "", "decision": "rejected"},
+                        {
+                            "investigation_id": investigation_id,
+                            "hil_approval_id": approval_id,
+                            "decision": "rejected",
+                        },
                     )
                     st.info("Rejected.")
 
