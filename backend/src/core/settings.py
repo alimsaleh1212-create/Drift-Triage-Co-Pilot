@@ -83,6 +83,14 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
+    @property
+    def checkpoint_database_url(self) -> str:
+        # Plain psycopg3 connection string for AsyncPostgresSaver (no SQLAlchemy prefix)
+        return (
+            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

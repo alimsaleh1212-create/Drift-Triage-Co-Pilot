@@ -23,18 +23,21 @@ services:
     image: ghcr.io/mlflow/mlflow:v2.21.3
     container_name: dt_mlflow
     restart: unless-stopped
-    network_mode: host
+    networks:
+      - dt_network
+    ports:
+      - "5000:5000"
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB:-drift_triage}
-      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drift_triage}
     volumes:
       - mlflow_data:/mlflow/artifacts
     command: >
       sh -c "pip install -q psycopg2-binary &&
       mlflow server
-      --backend-store-uri postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB:-drift_triage}
-      --default-artifact-root /mlflow/artifacts
-      --host 127.0.0.1
+      --backend-store-uri postgresql://${POSTGRES_USER:-drift_triage}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drift_triage}
+      --artifacts-destination /mlflow/artifacts
+      --serve-artifacts
+      --host 0.0.0.0
       --port 5000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" || exit 1"]
@@ -66,7 +69,7 @@ services:
       mlflow:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -92,7 +95,7 @@ services:
       mlflow:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\" || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -136,7 +139,8 @@ services:
 
 networks:
   dt_network:
-    driver: bridge
+    external: true
+    name: dev_network
 
 volumes:
   mlflow_data:
