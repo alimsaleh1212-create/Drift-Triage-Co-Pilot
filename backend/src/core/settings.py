@@ -20,10 +20,10 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-    env_file=".env",
-    env_file_encoding="utf-8",
-    extra="ignore",
-)
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # ── Secrets (from .env, gitignored) ──────────────────────────────
     google_api_key: str = Field(..., min_length=1)
@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # ── LLM — Fallback: Ollama ────────────────────────────────────────
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "llama3"
+
+    # ── LangSmith tracing (agent/LangGraph only) ─────────────────────
+    langsmith_tracing: bool = False
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "drift-triage-copilot"
 
     # ── ML / Drift thresholds ─────────────────────────────────────────
     random_state: int = 42

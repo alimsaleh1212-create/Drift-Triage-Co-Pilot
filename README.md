@@ -95,6 +95,20 @@ All secrets come from `.env` (gitignored). Copy `.env.example` and fill in the r
 
 For the full list of optional config variables, see `.env.example`.
 
+### LangSmith Tracing
+
+LangSmith is used only for LangGraph agent observability: inspecting the drift webhook input, supervisor routing, triage/action/comms nodes, dispatch decisions, and graph errors. It does not replace structlog, Postgres checkpoints, Redis queue behavior, HIL approval, or tests.
+
+To enable tracing locally, add these optional variables to `.env` and restart the agent:
+
+```bash
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=<your-langsmith-api-key>
+LANGSMITH_PROJECT=drift-triage-copilot
+```
+
+Trigger a run by sending a drift event to `POST http://localhost:8001/webhook/drift` or by using the existing service flow that emits the drift webhook. In LangSmith, open the `drift-triage-copilot` project and look for runs named `drift-triage-langgraph`; traces include safe metadata such as `investigation_id`, `report_id`, severity, model name/version, and request ID when provided. To disable tracing, remove `LANGSMITH_TRACING` or set it to `false`, then restart the agent.
+
 ## ML Narrative
 
 ### Feature engineering

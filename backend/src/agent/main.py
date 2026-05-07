@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 from uuid import uuid4
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent.deps.db import close_db, get_session, init_db
 from agent.graph import build_graph
 from core.logging import configure_logging, get_logger
+from core.settings import Settings
 from drift.severity import DriftWebhookPayload
 
 log = get_logger(__name__)
@@ -27,7 +29,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from core.settings import get_settings
 
     settings = get_settings()
-    async with AsyncPostgresSaver.from_conn_string(settings.checkpoint_database_url) as checkpointer:
+    _configure_langsmith(settings)
+    async with AsyncPostgresSaver.from_conn_string(
+        settings.checkpoint_database_url
+    ) as checkpointer:
         await checkpointer.setup()
         app.state.graph = build_graph(checkpointer=checkpointer)
         log.info("agent.startup")
@@ -90,11 +95,17 @@ async def receive_drift_webhook(
             "status": "open",
             "drift_report_id": payload.report_id,
         }
-        config = {"configurable": {"thread_id": investigation_id}}
+        config = _graph_run_config(
+            investigation_id=investigation_id,
+            payload=payload,
+            request_id=_request_id_from_request(request),
+        )
         try:
             await graph.ainvoke(initial_state, config=config)
         except Exception as exc:
-            log.exception("graph.run_failed", investigation_id=investigation_id, error=str(exc))
+            log.exception(
+                "graph.run_failed", investigation_id=investigation_id, error=str(exc)
+            )
 
     background_tasks.add_task(_run_graph)
     return WebhookResponse(investigation_id=investigation_id, status="open")
@@ -138,7 +149,9 @@ async def _create_investigation(
 async def approve_hil(payload: HILApprovalRequest) -> HILApprovalResponse:
     """Record HIL decision and resume the paused investigation graph."""
     if payload.decision not in ("approved", "rejected"):
-        raise HTTPException(status_code=400, detail="decision must be 'approved' or 'rejected'")
+        raise HTTPException(
+            status_code=400, detail="decision must be 'approved' or 'rejected'"
+        )
 
     log.info(
         "hil.decision",
@@ -175,7 +188,7 @@ async def approve_hil(payload: HILApprovalRequest) -> HILApprovalResponse:
 
     if payload.decision == "approved":
         graph = app.state.graph
-        config = {"configurable": {"thread_id": payload.investigation_id}}
+        config = _graph_resume_config(investigation_id=payload.investigation_id)
         # Resume from the pause_for_human interrupt
         await graph.ainvoke(None, config=config)
 
@@ -208,12 +221,16 @@ async def list_hil_approvals() -> list[dict[str, Any]]:
 
 
 @router.get("/investigations")
-async def list_investigations(session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
+async def list_investigations(
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
     """List recent investigations from Postgres."""
     from sqlalchemy import text
 
     result = await session.execute(
-        text("SELECT id, status, summary_md, updated_at FROM investigations ORDER BY updated_at DESC LIMIT 50")
+        text(
+            "SELECT id, status, summary_md, updated_at FROM investigations ORDER BY updated_at DESC LIMIT 50"
+        )
     )
     rows = [dict(r._mapping) for r in result]
     return rows
@@ -243,3 +260,75 @@ app.include_router(router, tags=["agent"])
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _configure_langsmith(settings: Settings) -> None:
+    """Expose Settings-backed LangSmith values to LangGraph's env-based tracer."""
+    if not settings.langsmith_tracing:
+        return
+
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+    if settings.langsmith_api_key:
+        os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+
+    log.info(
+        "langsmith.tracing_configured",
+        project=settings.langsmith_project,
+    )
+
+
+def _graph_run_config(
+    *,
+    investigation_id: str,
+    payload: DriftWebhookPayload,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Build LangGraph RunnableConfig with safe LangSmith metadata."""
+    metadata = {
+        "investigation_id": investigation_id,
+        "report_id": payload.report_id,
+        "drift_severity": payload.severity,
+        "model_name": payload.model_name,
+        "model_version": payload.model_version,
+        "request_id": request_id,
+    }
+    return {
+        "configurable": {"thread_id": investigation_id},
+        "run_name": "drift-triage-langgraph",
+        "tags": _trace_tags(),
+        "metadata": {
+            key: value for key, value in metadata.items() if value is not None
+        },
+    }
+
+
+def _graph_resume_config(*, investigation_id: str) -> dict[str, Any]:
+    """Build trace config for graph resume after HIL approval."""
+    return {
+        "configurable": {"thread_id": investigation_id},
+        "run_name": "drift-triage-langgraph-resume",
+        "tags": _trace_tags(extra=["hil-resume"]),
+        "metadata": {
+            "investigation_id": investigation_id,
+            "event": "hil_approval_resume",
+        },
+    }
+
+
+def _trace_tags(extra: list[str] | None = None) -> list[str]:
+    tags = ["drift-triage", "langgraph", "supervisor"]
+    environment = os.getenv("APP_ENV") or os.getenv("ENVIRONMENT")
+    if environment:
+        tags.append(environment)
+    if extra:
+        tags.extend(extra)
+    return tags
+
+
+def _request_id_from_request(request: Any) -> str | None:
+    if request is None:
+        return None
+    return request.headers.get("x-request-id") or request.headers.get(
+        "x-correlation-id"
+    )
