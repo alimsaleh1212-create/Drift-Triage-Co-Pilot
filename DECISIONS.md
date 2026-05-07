@@ -5,6 +5,7 @@
 | LLM primary | Gemini 2.5 Flash / Pro | Quality + structured output; affordable flash for high-frequency triage calls |
 | LLM fallback | Ollama (llama3) | Resilience when Gemini is down; no external dependency at runtime |
 | Webhook vs poll | Push (platform → agent) | Lower latency; simpler agent state; avoids polling interval tuning |
+| Drift webhook delivery state | Persist last successfully emitted severity in Postgres | Service restarts do not re-emit same-severity reports; failed webhooks are not marked delivered |
 | Queue library | arq (async, Redis) | Lightweight, async-native, built-in retry/DLQ, no Celery broker overhead |
 | Agent checkpoint | Postgres (langgraph-checkpoint-postgres) | Brief requirement; survives restarts; queryable; same infra as rest of stack |
 | Model registry | MLflow with Postgres backend | Full versioning, staging/production transitions, run comparison UI |

@@ -22,12 +22,14 @@ def _make_model_version(stage: str, tags: dict | None = None):
 
 @pytest.fixture()
 def client():
-    with patch("service.main.get_settings") as mock_settings, \
-         patch("service.main.load_model") as mock_load, \
-         patch("service.main.load_reference_stats"), \
-         patch("service.main.create_async_engine") as mock_create_engine, \
-         patch("service.main.async_sessionmaker") as mock_sessionmaker, \
-         patch("service.routers.promotion.get_settings"):
+    with (
+        patch("service.main.get_settings") as mock_settings,
+        patch("service.main.load_model") as mock_load,
+        patch("service.main.load_reference_stats"),
+        patch("service.main.create_async_engine") as mock_create_engine,
+        patch("service.main.async_sessionmaker") as mock_sessionmaker,
+        patch("service.routers.promotion.get_settings"),
+    ):
         from core.settings import Settings
 
         settings = Settings(
@@ -86,8 +88,10 @@ def test_promotion_rejects_missing_api_key(client):
 
 
 def test_promotion_rejects_low_recall(client):
-    with patch("mlflow.MlflowClient") as mock_mlflow_client, \
-         patch("mlflow.set_tracking_uri"):
+    with (
+        patch("mlflow.MlflowClient") as mock_mlflow_client,
+        patch("mlflow.set_tracking_uri"),
+    ):
         mock_client = MagicMock()
         target = _make_model_version("Staging", tags={"auc": "0.85", "recall": "0.60"})
         prod = _make_model_version("Production", tags={"auc": "0.83"})
@@ -110,8 +114,10 @@ def test_promotion_rejects_low_recall(client):
 
 
 def test_promotion_rejects_lower_auc(client):
-    with patch("mlflow.MlflowClient") as mock_mlflow_client, \
-         patch("mlflow.set_tracking_uri"):
+    with (
+        patch("mlflow.MlflowClient") as mock_mlflow_client,
+        patch("mlflow.set_tracking_uri"),
+    ):
         mock_client = MagicMock()
         target = _make_model_version("Staging", tags={"auc": "0.80", "recall": "0.80"})
         prod = _make_model_version("Production", tags={"auc": "0.85"})
@@ -137,35 +143,64 @@ def test_drift_webhook_payload_schema():
     from drift.severity import (
         DriftWebhookPayload,
         WebhookChi2Result,
+        WebhookDriftSummary,
         WebhookOutputDrift,
         WebhookPSIResult,
+        WebhookTopFeature,
     )
 
     payload = DriftWebhookPayload(
-        version="v1",
+        schema_version="v1",
+        event_id="evt-123",
         report_id="rpt-123",
+        previous_severity="medium",
         model_name="drift-triage-classifier",
         model_version=1,
         severity="high",
+        created_at="2025-01-01T00:00:00Z",
+        drift_summary=WebhookDriftSummary(
+            text="Severity changed to high.",
+            window_size=500,
+            output_drift_severity="medium",
+        ),
+        top_features=[
+            WebhookTopFeature(
+                feature="euribor3m",
+                metric="psi",
+                value=0.35,
+                severity="high",
+            )
+        ],
         psi_results=[WebhookPSIResult(feature="euribor3m", psi=0.35, severity="high")],
-        chi2_results=[WebhookChi2Result(feature="job", statistic=25.0, p_value=0.003, severity="high")],
+        chi2_results=[
+            WebhookChi2Result(
+                feature="job", statistic=25.0, p_value=0.003, severity="high"
+            )
+        ],
         output_drift=WebhookOutputDrift(psi=0.15, severity="medium"),
-        timestamp="2025-01-01T00:00:00Z",
         window_size=500,
     )
-    assert payload.version == "v1"
+    assert payload.schema_version == "v1"
     assert payload.severity == "high"
 
     with pytest.raises(Exception):
         DriftWebhookPayload(
-            version="v2",
+            schema_version="v2",
+            event_id="evt-123",
             report_id="rpt-123",
+            previous_severity=None,
             model_name="m",
             model_version=1,
             severity="critical",
+            created_at="2025-01-01T00:00:00Z",
+            drift_summary=WebhookDriftSummary(
+                text="summary",
+                window_size=100,
+                output_drift_severity="low",
+            ),
+            top_features=[],
             psi_results=[],
             chi2_results=[],
             output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
-            timestamp="2025-01-01T00:00:00Z",
             window_size=100,
         )

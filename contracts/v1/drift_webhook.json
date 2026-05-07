@@ -1,25 +1,65 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "DriftWebhookPayload",
-  "description": "v1 contract: model service → agent on drift severity change",
+  "description": "v1 contract: model service -> agent on drift severity change",
   "type": "object",
   "required": [
-    "version",
+    "schema_version",
+    "event_id",
     "report_id",
+    "previous_severity",
     "model_name",
     "model_version",
     "severity",
+    "created_at",
+    "drift_summary",
+    "top_features",
     "psi_results",
     "chi2_results",
     "output_drift",
-    "timestamp"
+    "window_size"
   ],
   "properties": {
-    "version": { "type": "string", "enum": ["v1"] },
+    "schema_version": { "type": "string", "enum": ["v1"] },
+    "event_id": { "type": "string", "minLength": 1 },
     "report_id": { "type": "string", "minLength": 1 },
+    "previous_severity": {
+      "anyOf": [
+        { "type": "string", "enum": ["low", "medium", "high"] },
+        { "type": "null" }
+      ]
+    },
     "model_name": { "type": "string", "minLength": 1 },
     "model_version": { "type": "integer", "minimum": 1 },
     "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "drift_summary": {
+      "type": "object",
+      "required": ["text", "window_size", "output_drift_severity"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "window_size": { "type": "integer", "minimum": 0 },
+        "output_drift_severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "top_features": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["feature", "metric", "value", "severity"],
+        "properties": {
+          "feature": { "type": "string" },
+          "metric": { "type": "string", "enum": ["psi", "chi2"] },
+          "value": { "type": "number", "minimum": 0 },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] }
+        },
+        "additionalProperties": false
+      }
+    },
     "psi_results": {
       "type": "array",
       "items": {
@@ -29,7 +69,8 @@
           "feature": { "type": "string" },
           "psi": { "type": "number", "minimum": 0 },
           "severity": { "type": "string", "enum": ["low", "medium", "high"] }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "chi2_results": {
@@ -42,7 +83,8 @@
           "statistic": { "type": "number", "minimum": 0 },
           "p_value": { "type": "number", "minimum": 0, "maximum": 1 },
           "severity": { "type": "string", "enum": ["low", "medium", "high"] }
-        }
+        },
+        "additionalProperties": false
       }
     },
     "output_drift": {
@@ -51,9 +93,9 @@
       "properties": {
         "psi": { "type": "number", "minimum": 0 },
         "severity": { "type": "string", "enum": ["low", "medium", "high"] }
-      }
+      },
+      "additionalProperties": false
     },
-    "timestamp": { "type": "string", "format": "date-time" },
     "window_size": { "type": "integer", "minimum": 0 }
   },
   "additionalProperties": false

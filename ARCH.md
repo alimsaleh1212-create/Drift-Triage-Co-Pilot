@@ -14,9 +14,11 @@ Client          service         Postgres          agent
   |                |  compute PSI/chi2/output-PSI   |
   |                |←DriftReport    |               |
   |                |                |               |
+  |                |--SELECT drift_alert_state→|     |
   |    [severity changed]           |               |
   |                |--POST /webhook/drift (BG)-----→|
   |                |                |               |--open investigation
+  |                |--UPSERT drift_alert_state←|     |
 ```
 
 ## Sequence: Agent Triage → HIL → Dispatch
@@ -58,7 +60,7 @@ agent (graph)         Postgres          agent API       Dashboard       worker
 | Component | Owns | Exposes |
 |---|---|---|
 | `service` | Classifier loading, rolling-window predictions, PSI/chi² computation, drift cache, promotion gate | `POST /predict`, `GET /drift/report`, `POST /promotion/promote` |
-| `agent` | LangGraph graph, investigation lifecycle, HIL approval routing | `POST /webhook/drift`, `POST /hil/approve`, `GET /investigations` |
+| `agent` | LangGraph graph, idempotent drift webhook intake, investigation lifecycle, HIL approval routing | `POST /webhook/drift`, `POST /hil/approve`, `GET /investigations` |
 | `worker` | Slow job execution (retrain/rollback/replay), idempotency SETNX, DLQ | arq queue consumer |
 | `dashboard` | Read-only API consumer, HIL approval UI | Streamlit :8501 |
 | `mlflow` | Model registry, run tracking, artifact storage | HTTP :5000 |

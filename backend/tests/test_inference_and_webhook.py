@@ -13,6 +13,7 @@ from drift.severity import (
     DriftReport,
     DriftWebhookPayload,
     WebhookChi2Result,
+    WebhookDriftSummary,
     WebhookOutputDrift,
     WebhookPSIResult,
     report_to_webhook,
@@ -48,7 +49,13 @@ class TestWebhookConversion:
             model_name="drift-triage-classifier",
             model_version=1,
             psi_results=[
-                PSIResult(feature="euribor3m", psi=0.35, severity="high", reference_n=1000, current_n=500)
+                PSIResult(
+                    feature="euribor3m",
+                    psi=0.35,
+                    severity="high",
+                    reference_n=1000,
+                    current_n=500,
+                )
             ],
             chi2_results=[],
             output_drift=OutputDriftResult(
@@ -66,39 +73,59 @@ class TestWebhookConversion:
         report = self._make_report()
         webhook = report_to_webhook(report)
         assert isinstance(webhook, DriftWebhookPayload)
-        assert webhook.version == "v1"
+        assert webhook.schema_version == "v1"
+        assert webhook.event_id
         assert webhook.model_name == "drift-triage-classifier"
         assert webhook.severity == "high"
+        assert webhook.created_at == report.timestamp
+        assert webhook.drift_summary.window_size == 500
         assert len(webhook.psi_results) == 1
         assert webhook.psi_results[0].feature == "euribor3m"
         assert webhook.psi_results[0].psi == 0.35
+        assert webhook.top_features[0].feature == "euribor3m"
 
     def test_webhook_rejects_invalid_version(self):
         with pytest.raises(ValidationError):
             DriftWebhookPayload(
-                version="v2",
+                schema_version="v2",
+                event_id="evt-1",
                 report_id="rpt-1",
+                previous_severity=None,
                 model_name="m",
                 model_version=1,
                 severity="low",
+                created_at="2025-01-01T00:00:00Z",
+                drift_summary=WebhookDriftSummary(
+                    text="summary",
+                    window_size=100,
+                    output_drift_severity="low",
+                ),
+                top_features=[],
                 psi_results=[],
                 chi2_results=[],
                 output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
-                timestamp="2025-01-01T00:00:00Z",
                 window_size=100,
             )
 
     def test_webhook_rejects_invalid_severity(self):
         with pytest.raises(ValidationError):
             DriftWebhookPayload(
-                version="v1",
+                schema_version="v1",
+                event_id="evt-1",
                 report_id="rpt-1",
+                previous_severity=None,
                 model_name="m",
                 model_version=1,
                 severity="critical",
+                created_at="2025-01-01T00:00:00Z",
+                drift_summary=WebhookDriftSummary(
+                    text="summary",
+                    window_size=100,
+                    output_drift_severity="low",
+                ),
+                top_features=[],
                 psi_results=[],
                 chi2_results=[],
                 output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
-                timestamp="2025-01-01T00:00:00Z",
                 window_size=100,
             )

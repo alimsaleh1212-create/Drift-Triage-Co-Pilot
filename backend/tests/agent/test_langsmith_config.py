@@ -4,22 +4,30 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from drift.severity import DriftWebhookPayload, WebhookOutputDrift
+from drift.severity import DriftWebhookPayload, WebhookDriftSummary, WebhookOutputDrift
 
 
 def test_graph_run_config_adds_safe_trace_metadata() -> None:
     from agent.main import _graph_run_config
 
     payload = DriftWebhookPayload(
-        version="v1",
+        schema_version="v1",
+        event_id="event-123",
         report_id="report-123",
+        previous_severity="medium",
         model_name="drift-triage-classifier",
         model_version=7,
         severity="high",
+        created_at=datetime.now(timezone.utc),
+        drift_summary=WebhookDriftSummary(
+            text="Severity changed to high.",
+            window_size=500,
+            output_drift_severity="high",
+        ),
+        top_features=[],
         psi_results=[],
         chi2_results=[],
         output_drift=WebhookOutputDrift(psi=0.31, severity="high"),
-        timestamp=datetime.now(timezone.utc),
         window_size=500,
     )
 

@@ -9,6 +9,7 @@ import httpx
 import pandas as pd
 from cachetools import TTLCache
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenacity import (
     retry,
@@ -39,8 +40,6 @@ async def _fetch_rolling_window(
     session: AsyncSession, model_name: str, window_size: int
 ) -> pd.DataFrame:
     """Query the last window_size predictions from Postgres."""
-    from sqlalchemy import text
-
     result = await session.execute(
         text(
             "SELECT features, label FROM predictions "
@@ -129,27 +128,62 @@ async def _emit_webhook(client: httpx.AsyncClient, payload: dict[str, Any]) -> N
 
 
 async def _maybe_emit_severity_webhook(request: Request, report: DriftReport) -> None:
-    """Emit webhook to agent if drift severity has changed since last report."""
-    last = request.app.state.last_severity
-    if last == report.severity:
-        return
+    """Emit webhook to agent if persisted drift severity has changed."""
+    state_key = f"{report.model_name}:{report.model_version}"
 
-    request.app.state.last_severity = report.severity
-    payload = report_to_webhook(report)
-
-    try:
-        await _emit_webhook(
-            request.app.state.http_client, payload.model_dump(mode="json")
+    async with request.app.state.SessionLocal() as session:
+        result = await session.execute(
+            text(
+                "SELECT last_severity, last_report_id "
+                "FROM drift_alert_state "
+                "WHERE key = :key"
+            ),
+            {"key": state_key},
         )
+        row = result.fetchone()
+        previous = row.last_severity if row else None
+        if previous == report.severity:
+            return
+
+        payload = report_to_webhook(report, previous_severity=previous)
+        try:
+            await _emit_webhook(
+                request.app.state.http_client, payload.model_dump(mode="json")
+            )
+        except Exception as exc:
+            await session.rollback()
+            log.warning(
+                "drift.webhook.failed",
+                error=str(exc),
+                report_id=report.report_id,
+                severity=report.severity,
+                previous=previous,
+            )
+            return
+
+        await session.execute(
+            text(
+                "INSERT INTO drift_alert_state "
+                "(key, last_severity, last_report_id, updated_at) "
+                "VALUES (:key, :severity, :report_id, now()) "
+                "ON CONFLICT (key) DO UPDATE SET "
+                "last_severity = EXCLUDED.last_severity, "
+                "last_report_id = EXCLUDED.last_report_id, "
+                "updated_at = now()"
+            ),
+            {
+                "key": state_key,
+                "severity": report.severity,
+                "report_id": report.report_id,
+            },
+        )
+        await session.commit()
         log.info(
             "drift.webhook.sent",
             report_id=report.report_id,
             severity=report.severity,
-            previous=last,
+            previous=previous,
         )
-    except Exception as exc:
-        # Webhook failure must never break the drift endpoint
-        log.warning("drift.webhook.failed", error=str(exc), report_id=report.report_id)
 
 
 @router.get("/drift/report", response_model=DriftReport)

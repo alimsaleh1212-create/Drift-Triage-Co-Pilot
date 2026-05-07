@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.deps.db import close_db, get_session, init_db
@@ -68,16 +69,20 @@ async def receive_drift_webhook(
     background_tasks: BackgroundTasks,
     request: Any = None,
 ) -> WebhookResponse:
-    """Receive drift severity change webhook; open a new investigation."""
+    """Receive drift severity change webhook; open one investigation per event."""
     investigation_id = str(uuid4())
+
+    investigation_id, created = await _create_investigation(investigation_id, payload)
     log.info(
-        "webhook.received",
+        "webhook.received" if created else "webhook.duplicate",
         investigation_id=investigation_id,
+        event_id=payload.event_id,
         severity=payload.severity,
         report_id=payload.report_id,
     )
 
-    await _create_investigation(investigation_id, payload)
+    if not created:
+        return WebhookResponse(investigation_id=investigation_id, status="open")
 
     async def _run_graph() -> None:
         graph = app.state.graph
@@ -113,36 +118,80 @@ async def receive_drift_webhook(
 
 def _drift_event_summary(payload: DriftWebhookPayload) -> str:
     """Build the initial dashboard summary for a newly opened investigation."""
+    top_features = ", ".join(
+        f"{item.feature}={item.value:g} ({item.severity})"
+        for item in payload.top_features
+    )
+    if not top_features:
+        top_features = "none"
     return (
         "Drift event received: "
         f"severity={payload.severity}, "
+        f"previous_severity={payload.previous_severity or 'none'}, "
         f"model_name={payload.model_name}, "
         f"model_version={payload.model_version}, "
-        f"report_id={payload.report_id}"
+        f"report_id={payload.report_id}, "
+        f"event_id={payload.event_id}, "
+        f"top_features={top_features}. "
+        f"{payload.drift_summary.text}"
     )
 
 
 async def _create_investigation(
     investigation_id: str,
     payload: DriftWebhookPayload,
-) -> None:
+) -> tuple[str, bool]:
     """Persist the investigation row before graph/HIL work starts."""
     from sqlalchemy import text
 
     async with get_session() as session:
+        existing = await _find_existing_investigation(session, payload)
+        if existing:
+            return existing, False
+
         await session.execute(
             text(
                 "INSERT INTO investigations "
-                "(id, status, summary_md, created_at, updated_at) "
-                "VALUES (:id, :status, :summary_md, now(), now())"
+                "(id, drift_event_id, drift_report_id, status, summary_md, created_at, updated_at) "
+                "VALUES (:id, :event_id, :report_id, :status, :summary_md, now(), now())"
             ),
             {
                 "id": investigation_id,
+                "event_id": payload.event_id,
+                "report_id": payload.report_id,
                 "status": "open",
                 "summary_md": _drift_event_summary(payload),
             },
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            existing = await _find_existing_investigation(session, payload)
+            if existing:
+                return existing, False
+            raise
+        return investigation_id, True
+
+
+async def _find_existing_investigation(
+    session: AsyncSession,
+    payload: DriftWebhookPayload,
+) -> str | None:
+    """Return an existing investigation for this webhook event/report pair."""
+    from sqlalchemy import text
+
+    result = await session.execute(
+        text(
+            "SELECT id FROM investigations "
+            "WHERE drift_event_id = :event_id OR drift_report_id = :report_id "
+            "ORDER BY created_at ASC "
+            "LIMIT 1"
+        ),
+        {"event_id": payload.event_id, "report_id": payload.report_id},
+    )
+    row = result.fetchone()
+    return row.id if row else None
 
 
 @router.post("/hil/approve", response_model=HILApprovalResponse)
@@ -221,19 +270,21 @@ async def list_hil_approvals() -> list[dict[str, Any]]:
 
 
 @router.get("/investigations")
-async def list_investigations(
-    session: AsyncSession = Depends(get_session),
-) -> list[dict[str, Any]]:
+async def list_investigations() -> list[dict[str, Any]]:
     """List recent investigations from Postgres."""
     from sqlalchemy import text
 
-    result = await session.execute(
-        text(
-            "SELECT id, status, summary_md, updated_at FROM investigations ORDER BY updated_at DESC LIMIT 50"
+    async with get_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT "
+                "id, drift_event_id, drift_report_id, status, summary_md, updated_at "
+                "FROM investigations "
+                "ORDER BY updated_at DESC "
+                "LIMIT 50"
+            )
         )
-    )
-    rows = [dict(r._mapping) for r in result]
-    return rows
+        return [dict(r._mapping) for r in result]
 
 
 @router.get("/investigations/{investigation_id}")

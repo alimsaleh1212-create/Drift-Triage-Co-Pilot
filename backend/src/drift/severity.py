@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from drift.chi2 import Chi2Result
 from drift.output_drift import OutputDriftResult
@@ -41,6 +41,23 @@ class WebhookOutputDrift(BaseModel):
     severity: Severity
 
 
+class WebhookTopFeature(BaseModel):
+    """Compact feature summary for dashboard-friendly webhook display."""
+
+    feature: str
+    metric: Literal["psi", "chi2"]
+    value: float = Field(..., ge=0.0)
+    severity: Severity
+
+
+class WebhookDriftSummary(BaseModel):
+    """Human-readable drift summary carried with the webhook event."""
+
+    text: str = Field(..., min_length=1)
+    window_size: int = Field(..., ge=0)
+    output_drift_severity: Severity
+
+
 class DriftWebhookPayload(BaseModel):
     """Versioned contract: platform → agent on drift severity change.
 
@@ -48,15 +65,21 @@ class DriftWebhookPayload(BaseModel):
     The JSON Schema is mirrored in contracts/v1/drift_webhook.json.
     """
 
-    version: Literal["v1"] = "v1"
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["v1"] = "v1"
+    event_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
     report_id: str = Field(..., min_length=1)
+    previous_severity: Severity | None = None
     model_name: str = Field(..., min_length=1)
     model_version: int = Field(..., ge=1)
     severity: Severity
+    created_at: datetime
+    drift_summary: WebhookDriftSummary
+    top_features: list[WebhookTopFeature]
     psi_results: list[WebhookPSIResult]
     chi2_results: list[WebhookChi2Result]
     output_drift: WebhookOutputDrift
-    timestamp: datetime
     window_size: int = Field(..., ge=0)
 
 
@@ -130,19 +153,56 @@ def build_drift_report(
     )
 
 
-def report_to_webhook(report: DriftReport) -> DriftWebhookPayload:
+def report_to_webhook(
+    report: DriftReport,
+    previous_severity: Severity | None = None,
+) -> DriftWebhookPayload:
     """Convert a DriftReport to the versioned webhook contract payload.
 
     Per CLAUDE.md §23, the contract between platform and agent must be
     versioned and explicit. This function handles the mapping from the
     internal DriftReport model to the contract DriftWebhookPayload.
     """
+    top_features = sorted(
+        [
+            WebhookTopFeature(
+                feature=r.feature,
+                metric="psi",
+                value=r.psi,
+                severity=r.severity,
+            )
+            for r in report.psi_results
+        ]
+        + [
+            WebhookTopFeature(
+                feature=r.feature,
+                metric="chi2",
+                value=r.statistic,
+                severity=r.severity,
+            )
+            for r in report.chi2_results
+        ],
+        key=lambda r: (_SEVERITY_ORDER[r.severity], r.value),
+        reverse=True,
+    )[:5]
+    summary = WebhookDriftSummary(
+        text=(
+            f"Drift severity changed from {previous_severity or 'none'} "
+            f"to {report.severity} for {report.model_name} v{report.model_version}."
+        ),
+        window_size=report.window_size,
+        output_drift_severity=report.output_drift.severity,
+    )
     return DriftWebhookPayload(
-        version="v1",
+        schema_version="v1",
         report_id=report.report_id,
+        previous_severity=previous_severity,
         model_name=report.model_name,
         model_version=report.model_version,
         severity=report.severity,
+        created_at=report.timestamp,
+        drift_summary=summary,
+        top_features=top_features,
         psi_results=[
             WebhookPSIResult(feature=r.feature, psi=r.psi, severity=r.severity)
             for r in report.psi_results
@@ -160,6 +220,5 @@ def report_to_webhook(report: DriftReport) -> DriftWebhookPayload:
             psi=report.output_drift.psi,
             severity=report.output_drift.severity,
         ),
-        timestamp=report.timestamp,
         window_size=report.window_size,
     )

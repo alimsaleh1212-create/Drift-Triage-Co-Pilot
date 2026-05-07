@@ -36,7 +36,11 @@ class Prediction(Base):
     )
 
     __table_args__ = (
-        Index("predictions_created_at_idx", "created_at", postgresql_ops={"created_at": "DESC"}),
+        Index(
+            "predictions_created_at_idx",
+            "created_at",
+            postgresql_ops={"created_at": "DESC"},
+        ),
     )
 
 
@@ -46,6 +50,10 @@ class Investigation(Base):
     __tablename__ = "investigations"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
+    drift_event_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    drift_report_id: Mapped[str | None] = mapped_column(
+        Text, nullable=True, unique=True
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     summary_md: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -73,7 +81,9 @@ class HILApproval(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class PromotionEvent(Base):
@@ -81,11 +91,26 @@ class PromotionEvent(Base):
 
     __tablename__ = "promotion_events"
 
-    id: Mapped[str] = mapped_column(Text, primary_key=True, server_default=func.gen_random_uuid())
+    id: Mapped[str] = mapped_column(
+        Text, primary_key=True, server_default=func.gen_random_uuid()
+    )
     model_name: Mapped[str] = mapped_column(Text, nullable=False)
     promoted_version: Mapped[int] = mapped_column(Integer, nullable=False)
     previous_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     investigation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DriftAlertState(Base):
+    """Last successfully emitted drift webhook state for restart-safe delivery."""
+
+    __tablename__ = "drift_alert_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_severity: Mapped[str] = mapped_column(Text, nullable=False)
+    last_report_id: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

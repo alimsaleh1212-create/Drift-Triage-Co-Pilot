@@ -12,8 +12,10 @@ from drift.severity import (
     DriftReport,
     DriftWebhookPayload,
     WebhookChi2Result,
+    WebhookDriftSummary,
     WebhookOutputDrift,
     WebhookPSIResult,
+    WebhookTopFeature,
     build_drift_report,
 )
 from service.routers.prediction import PredictRequest, PredictResponse
@@ -22,8 +24,11 @@ from service.routers.promotion import PromotionRequest
 
 # ── PSI ─────────────────────────────────────────────────────────────────────
 
+
 def test_psi_result_valid() -> None:
-    r = PSIResult(feature="euribor3m", psi=0.05, severity="low", reference_n=1000, current_n=500)
+    r = PSIResult(
+        feature="euribor3m", psi=0.05, severity="low", reference_n=1000, current_n=500
+    )
     assert r.psi == 0.05
 
 
@@ -34,41 +39,85 @@ def test_psi_result_rejects_negative_psi() -> None:
 
 def test_psi_result_rejects_invalid_severity() -> None:
     with pytest.raises(ValidationError):
-        PSIResult(feature="x", psi=0.1, severity="critical", reference_n=100, current_n=100)
+        PSIResult(
+            feature="x", psi=0.1, severity="critical", reference_n=100, current_n=100
+        )
 
 
 # ── Chi2 ────────────────────────────────────────────────────────────────────
 
+
 def test_chi2_result_valid() -> None:
-    r = Chi2Result(feature="job", statistic=12.3, p_value=0.01, dof=9, severity="high", reference_n=1000, current_n=500)
+    r = Chi2Result(
+        feature="job",
+        statistic=12.3,
+        p_value=0.01,
+        dof=9,
+        severity="high",
+        reference_n=1000,
+        current_n=500,
+    )
     assert r.severity == "high"
 
 
 def test_chi2_result_rejects_p_value_out_of_range() -> None:
     with pytest.raises(ValidationError):
-        Chi2Result(feature="job", statistic=1.0, p_value=1.5, dof=5, severity="low", reference_n=100, current_n=100)
+        Chi2Result(
+            feature="job",
+            statistic=1.0,
+            p_value=1.5,
+            dof=5,
+            severity="low",
+            reference_n=100,
+            current_n=100,
+        )
 
 
 # ── DriftReport ─────────────────────────────────────────────────────────────
 
+
 def test_drift_report_severity_aggregation() -> None:
-    psi = [PSIResult(feature="f", psi=0.3, severity="high", reference_n=100, current_n=100)]
+    psi = [
+        PSIResult(feature="f", psi=0.3, severity="high", reference_n=100, current_n=100)
+    ]
     chi2: list[Chi2Result] = []
-    od = OutputDriftResult(psi=0.05, severity="low", reference_class_1_rate=0.1, current_class_1_rate=0.1, current_n=100)
+    od = OutputDriftResult(
+        psi=0.05,
+        severity="low",
+        reference_class_1_rate=0.1,
+        current_class_1_rate=0.1,
+        current_n=100,
+    )
     report = build_drift_report("m", 1, psi, chi2, od, 100)
     assert report.severity == "high"
 
 
 # ── Prediction ───────────────────────────────────────────────────────────────
 
+
 def test_predict_request_valid() -> None:
     req = PredictRequest(
-        age=35, job="admin.", marital="married", education="university.degree",
-        default="no", housing="yes", loan="no", contact="cellular",
-        month="may", day_of_week="mon", campaign=1, pdays=999, previous=0,
+        age=35,
+        job="admin.",
+        marital="married",
+        education="university.degree",
+        default="no",
+        housing="yes",
+        loan="no",
+        contact="cellular",
+        month="may",
+        day_of_week="mon",
+        campaign=1,
+        pdays=999,
+        previous=0,
         poutcome="nonexistent",
-        **{"emp.var.rate": -1.8, "cons.price.idx": 92.9, "cons.conf.idx": -46.2,
-           "euribor3m": 1.3, "nr.employed": 5099.1},
+        **{
+            "emp.var.rate": -1.8,
+            "cons.price.idx": 92.9,
+            "cons.conf.idx": -46.2,
+            "euribor3m": 1.3,
+            "nr.employed": 5099.1,
+        },
     )
     assert req.age == 35
 
@@ -76,16 +125,32 @@ def test_predict_request_valid() -> None:
 def test_predict_request_rejects_invalid_age() -> None:
     with pytest.raises(ValidationError):
         PredictRequest(
-            age=15, job="admin.", marital="married", education="university.degree",
-            default="no", housing="yes", loan="no", contact="cellular",
-            month="may", day_of_week="mon", campaign=1, pdays=999, previous=0,
+            age=15,
+            job="admin.",
+            marital="married",
+            education="university.degree",
+            default="no",
+            housing="yes",
+            loan="no",
+            contact="cellular",
+            month="may",
+            day_of_week="mon",
+            campaign=1,
+            pdays=999,
+            previous=0,
             poutcome="nonexistent",
-            **{"emp.var.rate": -1.8, "cons.price.idx": 92.9, "cons.conf.idx": -46.2,
-               "euribor3m": 1.3, "nr.employed": 5099.1},
+            **{
+                "emp.var.rate": -1.8,
+                "cons.price.idx": 92.9,
+                "cons.conf.idx": -46.2,
+                "euribor3m": 1.3,
+                "nr.employed": 5099.1,
+            },
         )
 
 
 # ── Promotion ────────────────────────────────────────────────────────────────
+
 
 def test_promotion_request_valid() -> None:
     r = PromotionRequest(
@@ -109,35 +174,60 @@ def test_promotion_request_rejects_zero_version() -> None:
 
 def test_webhook_payload_valid() -> None:
     payload = DriftWebhookPayload(
-        version="v1",
+        schema_version="v1",
+        event_id="evt-abc",
         report_id="rpt-abc",
+        previous_severity="medium",
         model_name="drift-triage-classifier",
         model_version=1,
         severity="high",
+        created_at="2025-01-01T00:00:00Z",
+        drift_summary=WebhookDriftSummary(
+            text="Severity changed to high.",
+            window_size=500,
+            output_drift_severity="medium",
+        ),
+        top_features=[
+            WebhookTopFeature(
+                feature="euribor3m",
+                metric="psi",
+                value=0.35,
+                severity="high",
+            )
+        ],
         psi_results=[WebhookPSIResult(feature="euribor3m", psi=0.35, severity="high")],
         chi2_results=[
-            WebhookChi2Result(feature="job", statistic=25.0, p_value=0.003, severity="high")
+            WebhookChi2Result(
+                feature="job", statistic=25.0, p_value=0.003, severity="high"
+            )
         ],
         output_drift=WebhookOutputDrift(psi=0.15, severity="medium"),
-        timestamp="2025-01-01T00:00:00Z",
         window_size=500,
     )
-    assert payload.version == "v1"
+    assert payload.schema_version == "v1"
     assert payload.severity == "high"
 
 
 def test_webhook_payload_rejects_invalid_version() -> None:
     with pytest.raises(ValidationError):
         DriftWebhookPayload(
-            version="v2",
+            schema_version="v2",
+            event_id="evt-1",
             report_id="rpt-1",
+            previous_severity=None,
             model_name="m",
             model_version=1,
             severity="low",
+            created_at="2025-01-01T00:00:00Z",
+            drift_summary=WebhookDriftSummary(
+                text="summary",
+                window_size=100,
+                output_drift_severity="low",
+            ),
+            top_features=[],
             psi_results=[],
             chi2_results=[],
             output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
-            timestamp="2025-01-01T00:00:00Z",
             window_size=100,
         )
 
@@ -145,14 +235,22 @@ def test_webhook_payload_rejects_invalid_version() -> None:
 def test_webhook_payload_rejects_invalid_severity() -> None:
     with pytest.raises(ValidationError):
         DriftWebhookPayload(
-            version="v1",
+            schema_version="v1",
+            event_id="evt-1",
             report_id="rpt-1",
+            previous_severity=None,
             model_name="m",
             model_version=1,
             severity="critical",
+            created_at="2025-01-01T00:00:00Z",
+            drift_summary=WebhookDriftSummary(
+                text="summary",
+                window_size=100,
+                output_drift_severity="low",
+            ),
+            top_features=[],
             psi_results=[],
             chi2_results=[],
             output_drift=WebhookOutputDrift(psi=0.0, severity="low"),
-            timestamp="2025-01-01T00:00:00Z",
             window_size=100,
         )

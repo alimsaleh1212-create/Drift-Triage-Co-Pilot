@@ -38,8 +38,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.threshold = threshold
     app.state.ref_stats = ref_stats
     app.state.model_name = MODEL_NAME
-    # Last emitted severity for change-detection (start as None)
-    app.state.last_severity = None
 
     # Shared async HTTP client for webhook delivery
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
