@@ -17,6 +17,21 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Tables owned by MLflow — Alembic must not touch them
+_MLFLOW_TABLES = {
+    "experiments", "runs", "metrics", "params", "tags", "experiment_tags",
+    "latest_metrics", "model_versions", "registered_models", "registered_model_tags",
+    "model_version_tags", "datasets", "inputs", "input_tags", "registered_model_aliases",
+    "trace_info", "trace_request_metadata", "trace_tags",
+    "alembic_version",
+}
+
+
+def include_object(obj: object, name: str, type_: str, reflected: bool, compare_to: object) -> bool:
+    if type_ == "table" and name in _MLFLOW_TABLES:
+        return False
+    return True
+
 
 def get_url() -> str:
     return get_settings().sync_database_url
@@ -29,6 +44,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table="alembic_version_dt",  # separate from MLflow's alembic_version
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -45,7 +62,12 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table="alembic_version_dt",  # separate from MLflow's alembic_version
+            include_object=include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

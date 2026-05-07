@@ -22,9 +22,16 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     init_db()
-    app.state.graph = build_graph()
-    log.info("agent.startup")
-    yield
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    from core.settings import get_settings
+
+    settings = get_settings()
+    async with AsyncPostgresSaver.from_conn_string(settings.checkpoint_database_url) as checkpointer:
+        await checkpointer.setup()
+        app.state.graph = build_graph(checkpointer=checkpointer)
+        log.info("agent.startup")
+        yield
     await close_db()
     log.info("agent.shutdown")
 
