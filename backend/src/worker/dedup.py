@@ -1,4 +1,4 @@
-"""Redis SETNX-based idempotency guard for arq job dispatch.
+"""Redis SETNX-based idempotency guard and DLQ push for arq jobs.
 
 Guarantees: one job per idempotency_key, even if enqueued twice.
 Key pattern: dispatch:{idempotency_key}  TTL = 24h.
@@ -6,7 +6,8 @@ Key pattern: dispatch:{idempotency_key}  TTL = 24h.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import json
+from typing import Any
 from uuid import uuid4
 
 import redis.asyncio as aioredis
@@ -16,7 +17,19 @@ from core.settings import get_settings
 
 log = get_logger(__name__)
 
+_DLQ_KEY = "drift_actions:dlq"
 _DEDUP_TTL_SECONDS = 86_400  # 24 hours — covers max job runtime + buffer
+
+
+async def push_to_dlq(
+    ctx: dict[str, Any], job_type: str, payload: dict[str, Any]
+) -> None:
+    """Push a failed job to the dead-letter queue after max retries exhausted."""
+    await ctx["redis"].rpush(
+        _DLQ_KEY,
+        json.dumps({"job_type": job_type, "payload": payload}),
+    )
+    log.error("worker.dlq", job_type=job_type)
 
 
 async def enqueue_with_dedup(
@@ -51,7 +64,9 @@ async def enqueue_with_dedup(
 
         import arq
 
-        pool = await arq.create_pool(arq.connections.RedisSettings.from_dsn(settings.redis_url))
+        pool = await arq.create_pool(
+            arq.connections.RedisSettings.from_dsn(settings.redis_url)
+        )
         job_id = str(uuid4())
         await pool.enqueue_job(
             job_type,
@@ -60,7 +75,7 @@ async def enqueue_with_dedup(
             payload=payload,
             _job_id=job_id,
             _queue_name=settings.redis_queue_name,
-)
+        )
         await pool.close()
         log.info("dedup.enqueued", idempotency_key=idempotency_key, job_id=job_id)
         return {"job_id": job_id, "status": "enqueued"}
