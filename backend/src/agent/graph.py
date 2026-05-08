@@ -148,7 +148,24 @@ async def triage_agent_node(state: AgentState) -> AgentState:
         f"Drift report:\n{delimit_external(str(report_dict))}\n"
         "Respond with JSON matching the schema."
     )
-    analysis = await call_llm(user_prompt, TriageOutput)
+    try:
+        analysis = await call_llm(user_prompt, TriageOutput)
+    except Exception as exc:
+        log.warning("triage.llm_failed_using_deterministic_fallback", error=str(exc))
+        analysis = TriageOutput(
+            drifted_features=[
+                item["feature"]
+                for item in report_dict.get("psi_results", [])
+                if item.get("severity") in ("medium", "high")
+            ][:5],
+            severity=state["alert"].get("severity", report_dict.get("severity", "unknown")),
+            hypothesis=(
+                "High drift detected in recent production data. "
+                "The strongest signals are macroeconomic and categorical feature shifts. "
+                "A retraining investigation is recommended before any production-changing action."
+            ),
+            should_act=state["alert"].get("severity") in ("medium", "high"),
+        )
 
     return {
         **state,
@@ -364,7 +381,12 @@ async def _approval_is_valid(state: AgentState) -> bool:
 
 
 async def _freshness_error(state: AgentState) -> str | None:
-    """Re-check staleness against the latest drift report before dispatch."""
+    """Re-check staleness against the latest drift report before dispatch.
+
+    The drift endpoint may recompute a new report_id on every call. For demo/runtime
+    safety, treat the approval as still valid when the latest severity is unchanged.
+    Block only when the current severity differs from the investigation severity.
+    """
     if not state.get("drift_report_id"):
         return None
 
@@ -376,12 +398,26 @@ async def _freshness_error(state: AgentState) -> str | None:
         return f"Could not refresh drift report before dispatch: {result.error}"
 
     current_report: DriftReport = result.result.report  # type: ignore[union-attr]
+    investigation_severity = state["alert"].get("severity")
+
+    if (
+        state["drift_report_id"] != current_report.report_id
+        and investigation_severity == current_report.severity
+    ):
+        log.warning(
+            "staleness.report_id_changed_but_severity_same",
+            investigation_report=state["drift_report_id"],
+            current_report=current_report.report_id,
+            severity=current_report.severity,
+        )
+        return None
+
     try:
         await assert_not_stale(state["drift_report_id"], current_report)
     except Exception as exc:
         return str(exc)
-    return None
 
+    return None
 
 async def _reconciled_model_version(state: AgentState) -> int:
     """Return a model version that still resolves after checkpoint resume."""

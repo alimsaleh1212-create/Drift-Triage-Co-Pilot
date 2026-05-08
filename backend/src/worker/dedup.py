@@ -59,7 +59,8 @@ async def enqueue_with_dedup(
             idempotency_key=idempotency_key,
             payload=payload,
             _job_id=job_id,
-        )
+            _queue_name=settings.redis_queue_name,
+)
         await pool.close()
         log.info("dedup.enqueued", idempotency_key=idempotency_key, job_id=job_id)
         return {"job_id": job_id, "status": "enqueued"}
