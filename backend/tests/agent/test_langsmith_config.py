@@ -8,7 +8,7 @@ from drift.severity import DriftWebhookPayload, WebhookDriftSummary, WebhookOutp
 
 
 def test_graph_run_config_adds_safe_trace_metadata() -> None:
-    from agent.main import _graph_run_config
+    from agent.deps.graph import graph_run_config
 
     payload = DriftWebhookPayload(
         schema_version="v1",
@@ -31,7 +31,7 @@ def test_graph_run_config_adds_safe_trace_metadata() -> None:
         window_size=500,
     )
 
-    config = _graph_run_config(
+    config = graph_run_config(
         investigation_id="investigation-123",
         payload=payload,
         request_id="request-abc",

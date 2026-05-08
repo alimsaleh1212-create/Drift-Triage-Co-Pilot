@@ -72,7 +72,7 @@ class _Rows:
 @pytest.mark.asyncio
 async def test_receive_drift_webhook_creates_investigation_row() -> None:
     """Webhook intake inserts investigation before graph work can request HIL."""
-    from agent.main import receive_drift_webhook
+    from agent.routers.webhook import receive_drift_webhook
 
     payload = _payload()
 
@@ -84,11 +84,16 @@ async def test_receive_drift_webhook_creates_investigation_row() -> None:
     async def fake_get_session():
         yield session
 
+    mock_graph = SimpleNamespace(ainvoke=AsyncMock())
+
     with (
-        patch("agent.main.uuid4", return_value="investigation-123"),
-        patch("agent.main.get_session", fake_get_session),
+        patch("agent.routers.webhook.uuid4", return_value="investigation-123"),
+        patch("agent.routers.webhook.get_session", fake_get_session),
+        patch("agent.routers.webhook.get_graph", return_value=mock_graph),
     ):
-        response = await receive_drift_webhook(payload, BackgroundTasks())
+        response = await receive_drift_webhook(
+            payload, BackgroundTasks(), request=None, graph=mock_graph
+        )
 
     assert response.investigation_id == "investigation-123"
     assert response.status == "open"
@@ -114,7 +119,7 @@ async def test_receive_drift_webhook_creates_investigation_row() -> None:
 @pytest.mark.asyncio
 async def test_receive_drift_webhook_is_idempotent_for_duplicate_event() -> None:
     """Repeated delivery returns the original investigation without inserting."""
-    from agent.main import receive_drift_webhook
+    from agent.routers.webhook import receive_drift_webhook
 
     payload = _payload(event_id="event-dup", report_id="report-dup")
     session = MagicMock()
@@ -127,11 +132,16 @@ async def test_receive_drift_webhook_is_idempotent_for_duplicate_event() -> None
     async def fake_get_session():
         yield session
 
+    mock_graph = SimpleNamespace(ainvoke=AsyncMock())
+
     with (
-        patch("agent.main.uuid4", return_value="investigation-new"),
-        patch("agent.main.get_session", fake_get_session),
+        patch("agent.routers.webhook.uuid4", return_value="investigation-new"),
+        patch("agent.routers.webhook.get_session", fake_get_session),
+        patch("agent.routers.webhook.get_graph", return_value=mock_graph),
     ):
-        response = await receive_drift_webhook(payload, BackgroundTasks())
+        response = await receive_drift_webhook(
+            payload, BackgroundTasks(), request=None, graph=mock_graph
+        )
 
     assert response.investigation_id == "investigation-existing"
     assert response.status == "open"
@@ -158,8 +168,8 @@ async def test_agent_webhook_endpoint_accepts_valid_payload_and_runs_graph() -> 
     transport = ASGITransport(app=app)
 
     with (
-        patch("agent.main.uuid4", return_value="investigation-http"),
-        patch("agent.main.get_session", fake_get_session),
+        patch("agent.routers.webhook.uuid4", return_value="investigation-http"),
+        patch("agent.routers.webhook.get_session", fake_get_session),
     ):
         async with AsyncClient(transport=transport, base_url="http://agent") as client:
             response = await client.post(
@@ -204,7 +214,7 @@ async def test_list_investigations_returns_json_with_nullable_drift_ids() -> Non
 
     transport = ASGITransport(app=app)
 
-    with patch("agent.main.get_session", fake_get_session):
+    with patch("agent.routers.investigations.get_session", fake_get_session):
         async with AsyncClient(transport=transport, base_url="http://agent") as client:
             health = await client.get("/health")
             response = await client.get("/investigations")

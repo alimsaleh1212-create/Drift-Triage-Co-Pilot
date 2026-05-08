@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.logging import get_logger
-from ml.inference import predict_batch
+from ml.inference import predict_batch, prepare_prediction_features
 from service.deps.classifier import get_classifier, get_threshold
 from service.deps.db import get_session
 
@@ -82,17 +82,6 @@ async def _log_prediction(
     await session.commit()
 
 
-def _prepare_features(payload: PredictRequest) -> dict[str, Any]:
-    """Convert validated PredictRequest to a feature dict matching training columns.
-
-    Applies the same feature engineering used during training:
-    ``pdays_was_999`` flag from ``pdays == 999``.
-    """
-    feature_dict: dict[str, Any] = payload.model_dump(by_alias=True)
-    feature_dict["pdays_was_999"] = int(feature_dict["pdays"] == 999)
-    return feature_dict
-
-
 @router.post("/predict", response_model=PredictResponse)
 async def predict(
     payload: PredictRequest,
@@ -105,7 +94,7 @@ async def predict(
     """Run inference on incoming features and log to the rolling window."""
     import pandas as pd
 
-    feature_dict = _prepare_features(payload)
+    feature_dict = prepare_prediction_features(payload.model_dump(by_alias=True))
     df = pd.DataFrame([feature_dict])
 
     proba = await asyncio.to_thread(lambda: float(predict_batch(df, classifier)[0]))

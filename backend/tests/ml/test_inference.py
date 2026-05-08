@@ -1,11 +1,15 @@
-"""Tests for prediction validation and inference."""
+"""Tests for prediction feature engineering and batch inference."""
 
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
+from sklearn.dummy import DummyClassifier
+from sklearn.pipeline import Pipeline
 
+from ml.inference import predict_batch, prepare_prediction_features
 from ml.schema import BankMarketingRequest
-
 
 VALID_PAYLOAD = {
     "age": 35,
@@ -55,19 +59,33 @@ def test_extra_fields_rejected():
         BankMarketingRequest.model_validate(bad_payload)
 
 
-def test_pdays_was_999_added():
-    from ml.inference import prepare_input_row
-
-    request = BankMarketingRequest.model_validate(VALID_PAYLOAD)
-    row = prepare_input_row(request)
-    assert "pdays_was_999" in row.columns
-    assert row["pdays_was_999"].iloc[0] == 1
+def test_prepare_prediction_features_adds_pdays_was_999():
+    feature_dict = dict(VALID_PAYLOAD)
+    result = prepare_prediction_features(feature_dict)
+    assert "pdays_was_999" in result
+    assert result["pdays_was_999"] == 1
 
 
-def test_pdays_not_999_flag():
-    from ml.inference import prepare_input_row
-
+def test_prepare_prediction_features_flags_non_999_pdays():
     payload = {**VALID_PAYLOAD, "pdays": 5}
-    request = BankMarketingRequest.model_validate(payload)
-    row = prepare_input_row(request)
-    assert row["pdays_was_999"].iloc[0] == 0
+    feature_dict = dict(payload)
+    result = prepare_prediction_features(feature_dict)
+    assert result["pdays_was_999"] == 0
+
+
+class TestPredictBatch:
+    def test_predict_batch_returns_probabilities(self):
+        X = pd.DataFrame({"feat": [1.0, 2.0, 3.0]})
+        pipeline = Pipeline([("clf", DummyClassifier(strategy="most_frequent"))])
+        pipeline.fit(X, [0, 0, 1])
+        result = predict_batch(X, pipeline)
+        assert isinstance(result, np.ndarray)
+        assert len(result) == 3
+        assert all(0 <= p <= 1 for p in result)
+
+    def test_predict_batch_positive_class(self):
+        X = pd.DataFrame({"feat": [1.0, 2.0]})
+        pipeline = Pipeline([("clf", DummyClassifier(strategy="most_frequent"))])
+        pipeline.fit(X, [0, 1])
+        result = predict_batch(X, pipeline)
+        assert result.shape == (2,)
