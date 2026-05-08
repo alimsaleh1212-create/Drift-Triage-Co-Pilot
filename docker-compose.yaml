@@ -37,7 +37,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra/postgres/init-pgvector.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     networks:
       - dev_network
     healthcheck:
@@ -116,6 +115,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─── Database migrations ──────────────────────────────────────────────────
+  migrations:
+    build:
+      context: ./backend
+      target: migrate
+    container_name: dt_migrations
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+    networks:
+      - dev_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    profiles: ["migrate"]
+
   # ─── Model service ────────────────────────────────────────────────────────
   service:
     build:
@@ -145,6 +161,9 @@ services:
         required: false
       mlflow:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+        required: false
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
       interval: 10s
@@ -177,6 +196,9 @@ services:
         required: false
       mlflow:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+        required: false
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\" || exit 1"]
       interval: 10s
@@ -206,6 +228,9 @@ services:
         required: false
       redis:
         condition: service_healthy
+        required: false
+      migrations:
+        condition: service_completed_successfully
         required: false
 
   # ─── Streamlit dashboard ──────────────────────────────────────────────────
