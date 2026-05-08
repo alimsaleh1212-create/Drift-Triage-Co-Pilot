@@ -190,6 +190,7 @@ async def _maybe_emit_severity_webhook(request: Request, report: DriftReport) ->
 async def get_drift_report(
     background_tasks: BackgroundTasks,
     request: Request,
+    force: bool = False,
     ref_stats: ReferenceStats = Depends(get_ref_stats),
     session: AsyncSession = Depends(get_session),
 ) -> DriftReport:
@@ -197,11 +198,11 @@ async def get_drift_report(
     model_name: str = request.app.state.model_name
     key = model_name
 
-    if key in _drift_cache:
+    if not force and key in _drift_cache:
         return _drift_cache[key]
 
     async with _drift_lock:
-        if key in _drift_cache:
+        if not force and key in _drift_cache:
             return _drift_cache[key]
 
         report = await _compute_drift(ref_stats, session, model_name, model_version=1)
