@@ -13,7 +13,7 @@ data:
 	cp /tmp/bank/bank-additional/bank-additional-full.csv backend/artifacts/data/raw/
 
 train:
-	cd backend && uv run python -m ml.train
+	cd backend && ENV_FILE=../.env uv run python -m ml.train
 
 # ── Database ──────────────────────────────────────────────────────────────────
 # Create the drift_triage database on a shared postgres instance.

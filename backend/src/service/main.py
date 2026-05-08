@@ -30,9 +30,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = engine
     app.state.SessionLocal = SessionLocal
 
-    # ML artefacts — loaded once, reused per request
-    pipeline, threshold = load_model()
-    ref_stats = load_reference_stats()
+    # ML artefacts — loaded once, reused per request.
+    # If no model has been trained yet, start without one; /predict returns 503.
+    try:
+        pipeline, threshold = load_model()
+        ref_stats = load_reference_stats()
+    except RuntimeError as exc:
+        log.warning("service.no_model", reason=str(exc))
+        pipeline, threshold, ref_stats = None, 0.5, None
 
     app.state.classifier = pipeline
     app.state.threshold = threshold

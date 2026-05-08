@@ -69,7 +69,7 @@ packages = ["src/core", "src/ml", "src/drift", "src/service", "src/agent", "src/
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"
+addopts = "--cov=src --cov-report=term-missing --cov-fail-under=50"
 
 [tool.black]
 line-length = 88

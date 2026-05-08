@@ -25,7 +25,7 @@ _PSI_WARN = 0.1
 _PSI_HIGH = 0.25
 
 
-def _psi_severity(psi: float) -> str:
+def _psi_severity(psi: float) -> Severity:
     if psi >= _PSI_HIGH:
         return "high"
     if psi >= _PSI_WARN:

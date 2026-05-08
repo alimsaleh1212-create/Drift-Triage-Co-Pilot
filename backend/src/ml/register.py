@@ -16,16 +16,16 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
+import structlog
 from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 from sklearn.pipeline import Pipeline
-
-import structlog
 
 from core.settings import get_settings
 from ml.reference_stats import ReferenceStats, save_reference_stats
 
 if TYPE_CHECKING:
+    from ml.data import DataSplit
     from ml.train import TrainResult
 
 log = structlog.get_logger(__name__)
@@ -75,7 +75,7 @@ def register_model(
     threshold: float,
     ref_stats: ReferenceStats,
     dataset_hash: str,
-    split_data: object | None = None,
+    split_data: "DataSplit | None" = None,
 ) -> str:
     """Log and register the best model in MLflow.
 
@@ -131,8 +131,12 @@ def register_model(
                 "random_state": settings.random_state,
                 "min_recall": settings.min_recall,
                 "operating_threshold": threshold,
-                "n_numeric_features": len(split_data.numeric_features) if split_data else 0,
-                "n_categorical_features": len(split_data.categorical_features) if split_data else 0,
+                "n_numeric_features": (
+                    len(split_data.numeric_features) if split_data else 0
+                ),
+                "n_categorical_features": (
+                    len(split_data.categorical_features) if split_data else 0
+                ),
             }
         )
 
@@ -204,9 +208,8 @@ def register_model(
         source_proba = pipeline.predict_proba(split_data.X_val.head(10))
         registered_proba = registered_pipeline.predict_proba(split_data.X_val.head(10))
         max_diff = float(np.max(np.abs(source_proba - registered_proba)))
-        assert np.allclose(source_proba, registered_proba, atol=1e-12), (
-            f"Registered model predictions differ from source model. Max diff: {max_diff:.2e}"
-        )
+        msg = f"Registered model differs from source. Max diff: {max_diff:.2e}"
+        assert np.allclose(source_proba, registered_proba, atol=1e-12), msg
         log.info("register.fidelity_check", max_diff=f"{max_diff:.2e}")
 
     log.info(
@@ -239,12 +242,16 @@ def load_model(model_name: str = MODEL_NAME) -> tuple[Pipeline, float]:
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
 
     client = mlflow.MlflowClient()
-    versions = client.get_latest_versions(model_name, stages=["Production"])
-    stage = "Production"
-    if not versions:
-        log.warning("register.no_production_model", model_name=model_name)
-        versions = client.get_latest_versions(model_name, stages=["Staging"])
-        stage = "Staging"
+    try:
+        versions = client.get_latest_versions(model_name, stages=["Production"])
+        stage = "Production"
+        if not versions:
+            log.warning("register.no_production_model", model_name=model_name)
+            versions = client.get_latest_versions(model_name, stages=["Staging"])
+            stage = "Staging"
+    except mlflow.exceptions.MlflowException:
+        versions = []
+        stage = "none"
     if not versions:
         raise RuntimeError(
             f"No Production or Staging model found for '{model_name}'. "

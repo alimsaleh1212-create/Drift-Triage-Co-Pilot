@@ -1,15 +1,11 @@
 # docker-compose.override.yml
 # Dev-mode overlay: bind-mounted backend source + live reload.
 # Docker Compose auto-merges this file with docker-compose.yaml.
+#
+# migrate is intentionally omitted — run `make migrate` locally instead:
+#   cd backend && uv run alembic upgrade head
 
 services:
-  migrate:
-    image: drift-triage-co-pilot-service:latest
-    volumes:
-      - ./backend/alembic.ini:/app/alembic.ini:ro
-      - ./backend/migrations:/app/migrations:ro
-    command: ["uv", "run", "--no-dev", "alembic", "upgrade", "head"]
-
   service:
     volumes:
       - ./backend/src:/app/src
@@ -34,3 +30,7 @@ services:
     environment:
       PYTHONPATH: /app/src
     command: ["uv", "run", "--no-dev", "arq", "worker.main.WorkerSettings"]
+
+  dashboard:
+    volumes:
+      - ./frontend/app.py:/app/app.py

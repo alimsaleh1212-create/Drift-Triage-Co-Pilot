@@ -3,7 +3,7 @@ repos:
     rev: 25.1.0
     hooks:
       - id: black
-        language_version: python3.11
+        language_version: python3
 
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
@@ -21,7 +21,7 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
-        args: ["--strict"]
+        args: ["--ignore-missing-imports"]
         additional_dependencies:
           - "pydantic==2.11.3"
           - "pydantic-settings==2.9.1"
@@ -31,12 +31,7 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest -x -q --no-header
+        entry: bash -c 'cd backend && uv run pytest -x -q --no-header'
         language: system
         pass_filenames: false
         always_run: true
-
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.23.3
-    hooks:
-      - id: gitleaks

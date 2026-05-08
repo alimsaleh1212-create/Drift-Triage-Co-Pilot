@@ -22,6 +22,7 @@ from typing import Any
 
 import joblib
 import numpy as np
+import structlog
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -31,9 +32,7 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import Pipeline
 
-import structlog
-
-from core.settings import get_settings
+from core.settings import Settings, get_settings
 from ml.data import DataSplit, load_data
 from ml.pipeline import build_pipeline
 from ml.reference_stats import compute_reference_stats
@@ -217,7 +216,7 @@ def train(split: DataSplit) -> TrainResult:
     )
 
 
-def _write_training_report(result: TrainResult, settings: object) -> Path:
+def _write_training_report(result: TrainResult, settings: "Settings") -> Path:
     """Write the full training report JSON with all model comparisons."""
     report = {
         "created_at": _utc_now(),
@@ -226,7 +225,9 @@ def _write_training_report(result: TrainResult, settings: object) -> Path:
         "split": result.split_info,
         "selected_model": result.model_name,
         "selected_threshold": result.threshold,
-        "threshold_rule": f"highest threshold where validation recall >= {settings.min_recall}",
+        "threshold_rule": (
+            f"highest threshold where validation recall >= {settings.min_recall}"
+        ),
         "dataset_hash": result.dataset_hash,
         "model_artifact_sha256": _sha256_of(MODEL_OUTPUT_PATH),
         "validation_results": {
@@ -262,7 +263,7 @@ def _write_training_report(result: TrainResult, settings: object) -> Path:
     return REPORT_OUTPUT_PATH
 
 
-def _write_threshold_config(result: TrainResult, settings: object) -> Path:
+def _write_threshold_config(result: TrainResult, settings: "Settings") -> Path:
     """Write the operating threshold configuration JSON."""
     threshold_artifact = {
         "registered_model_name": MODEL_NAME,
@@ -280,7 +281,7 @@ def _write_threshold_config(result: TrainResult, settings: object) -> Path:
     return THRESHOLD_OUTPUT_PATH
 
 
-def _write_model_card(result: TrainResult, settings: object) -> Path:
+def _write_model_card(result: TrainResult, settings: "Settings") -> Path:
     """Write a markdown model card per CLAUDE.md §17 requirements."""
     from ml.register import _environment_fingerprint
 
@@ -298,7 +299,8 @@ def _write_model_card(result: TrainResult, settings: object) -> Path:
 
 ## Intended use
 
-Predict whether a client will subscribe to a term deposit using the UCI Bank Marketing dataset.
+Predict whether a client will subscribe to a term deposit using
+the UCI Bank Marketing dataset.
 
 The model outputs a probability for the positive class:
 
@@ -359,8 +361,10 @@ A large gap would suggest overfitting.
 
 ## Known limitations
 
-- The positive class is rare, so precision is expected to be low when recall is forced near {settings.min_recall}.
-- The model is trained on historical campaign data and may drift if economic indicators or customer behavior shift.
+- The positive class is rare, so precision is low when recall is
+  forced near {settings.min_recall}.
+- The model is trained on historical campaign data and may drift if
+  economic indicators or customer behavior shift.
 - The threshold is a deployment policy and should be logged with every prediction.
 
 ## Environment fingerprint

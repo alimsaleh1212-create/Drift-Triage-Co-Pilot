@@ -5,10 +5,14 @@ For production, migrate secrets to HashiCorp Vault — see DECISIONS.md.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Allow callers (e.g. `make train`) to point at a .env outside the cwd.
+_env_file = os.environ.get("ENV_FILE", ".env")
 
 
 class Settings(BaseSettings):
@@ -20,7 +24,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_env_file,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -100,4 +104,4 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the singleton Settings instance, reading from .env / env vars."""
-    return Settings()
+    return Settings()  # type: ignore[call-arg]

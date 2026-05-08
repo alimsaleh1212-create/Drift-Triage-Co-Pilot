@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
-from scipy.stats import chi2_contingency  # type: ignore[import-untyped]
 
 from core.settings import get_settings
+from drift.psi import Severity
 
 
 class Chi2Result(BaseModel):
@@ -17,12 +17,12 @@ class Chi2Result(BaseModel):
     statistic: float = Field(..., ge=0.0)
     p_value: float = Field(..., ge=0.0, le=1.0)
     dof: int
-    severity: str  # "low" | "medium" | "high"
+    severity: Severity
     reference_n: int
     current_n: int
 
 
-def _chi2_severity(p_value: float, alpha: float) -> str:
+def _chi2_severity(p_value: float, alpha: float) -> Severity:
     if p_value < 0.01:
         return "high"
     if p_value < alpha:

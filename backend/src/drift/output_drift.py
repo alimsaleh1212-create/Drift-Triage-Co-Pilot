@@ -5,14 +5,14 @@ from __future__ import annotations
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from drift.psi import PSIResult, compute_psi, _psi_severity
+from drift.psi import Severity, _psi_severity, compute_psi
 
 
 class OutputDriftResult(BaseModel):
     """PSI on predicted class distribution (output drift)."""
 
     psi: float = Field(..., ge=0.0)
-    severity: str
+    severity: Severity
     reference_class_1_rate: float
     current_class_1_rate: float
     current_n: int
@@ -44,8 +44,6 @@ def compute_output_drift(
     ref_rate = reference_proportions.get("1", 0.0)
 
     # Build binary series to reuse compute_psi
-    import numpy as np
-
     ref_series = pd.Series([0.0] * 100 + [1.0] * int(ref_rate * 100))
     cur_series = current_predictions.astype(float)
 

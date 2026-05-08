@@ -117,7 +117,7 @@ def aggregate_severity(
         + [r.severity for r in chi2_results]
         + [output_drift.severity]
     )
-    return max(all_severities, key=lambda s: _SEVERITY_ORDER[s])  # type: ignore[return-value]
+    return max(all_severities, key=lambda s: _SEVERITY_ORDER[s])
 
 
 def build_drift_report(
