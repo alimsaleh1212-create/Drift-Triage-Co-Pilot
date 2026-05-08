@@ -34,3 +34,4 @@ services:
   dashboard:
     volumes:
       - ./frontend/app.py:/app/app.py
+      - ./data/demo_batches:/app/data/demo_batches:ro
