@@ -15,7 +15,9 @@ log = get_logger(__name__)
 _DLQ_KEY = "drift_actions:dlq"
 
 
-async def _push_dlq(ctx: dict[str, Any], job_type: str, payload: dict[str, Any]) -> None:
+async def _push_dlq(
+    ctx: dict[str, Any], job_type: str, payload: dict[str, Any]
+) -> None:
     import json
 
     await ctx["redis"].rpush(
@@ -31,12 +33,17 @@ async def replay_test(
     idempotency_key: str,
     payload: dict[str, Any],
 ) -> None:
-    """Run the held-out test set through the current Production model and log metrics."""
+    """Run held-out test set through Production model and log metrics."""
     log.info("worker.replay_test.start", investigation_id=investigation_id)
     try:
         import mlflow
-        import numpy as np
-        from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+        from sklearn.metrics import (
+            accuracy_score,
+            f1_score,
+            precision_score,
+            recall_score,
+            roc_auc_score,
+        )
 
         from core.settings import get_settings
         from ml.data import load_data
@@ -54,7 +61,9 @@ async def replay_test(
         metrics = {
             "replay_accuracy": float(accuracy_score(split.y_test, labels)),
             "replay_f1": float(f1_score(split.y_test, labels)),
-            "replay_precision": float(precision_score(split.y_test, labels, zero_division=0)),
+            "replay_precision": float(
+                precision_score(split.y_test, labels, zero_division=0)
+            ),
             "replay_recall": float(recall_score(split.y_test, labels)),
             "replay_auc": float(roc_auc_score(split.y_test, proba)),
         }
@@ -67,7 +76,9 @@ async def replay_test(
             mlflow.log_metrics(metrics)
             mlflow.end_run()
 
-        log.info("worker.replay_test.done", investigation_id=investigation_id, **metrics)
+        log.info(
+            "worker.replay_test.done", investigation_id=investigation_id, **metrics
+        )
     except Exception:
         log.exception("worker.replay_test.error", investigation_id=investigation_id)
         if ctx.get("job_try", 1) >= 3:
@@ -82,21 +93,83 @@ async def retrain(
     idempotency_key: str,
     payload: dict[str, Any],
 ) -> None:
-    """Full retrain pipeline on current data, register as Staging."""
+    """Full retrain on current data; register as Staging, auto-promote if better."""
     log.info("worker.retrain.start", investigation_id=investigation_id)
     try:
+        import mlflow
+
         from ml.data import load_data
         from ml.reference_stats import compute_reference_stats
-        from ml.register import register_model
+        from ml.register import MODEL_NAME, register_model
         from ml.threshold import find_threshold
         from ml.train import train
+
+        settings = get_settings()
+        mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+        client = mlflow.MlflowClient()
 
         split = load_data()
         result = train(split)
         threshold = find_threshold(result.pipeline, split.X_val, split.y_val)
         ref_stats = compute_reference_stats(result.pipeline, split)
         run_id = register_model(result, threshold, ref_stats, split.dataset_hash)
-        log.info("worker.retrain.done", investigation_id=investigation_id, run_id=run_id)
+        log.info(
+            "worker.retrain.done",
+            investigation_id=investigation_id,
+            run_id=run_id,
+            auc=result.auc,
+        )
+
+        # Auto-promote to Production if new model is at least as good
+        staging_versions = client.get_latest_versions(MODEL_NAME, stages=["Staging"])
+        if not staging_versions:
+            log.warning("worker.retrain.no_staging", investigation_id=investigation_id)
+            return
+
+        new_version = int(staging_versions[0].version)
+        new_auc = result.auc
+
+        prod_versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+        prod_auc = float(prod_versions[0].tags.get("auc", 0)) if prod_versions else 0.0
+
+        if new_auc >= prod_auc:
+            import httpx
+
+            hil_approval_id = payload.get("hil_approval_id", "")
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                r = await http.post(
+                    f"{settings.service_url}/api/v1/promotion/promote",
+                    headers={"X-Promotion-Key": settings.promotion_api_key},
+                    json={
+                        "model_name": MODEL_NAME,
+                        "target_version": new_version,
+                        "investigation_id": investigation_id,
+                        "hil_approval_id": hil_approval_id,
+                    },
+                )
+                if not r.is_success:
+                    log.warning(
+                        "worker.retrain.promotion_failed",
+                        investigation_id=investigation_id,
+                        new_version=new_version,
+                        status=r.status_code,
+                        detail=r.text,
+                    )
+                r.raise_for_status()
+            log.info(
+                "worker.retrain.promoted",
+                investigation_id=investigation_id,
+                new_version=new_version,
+                new_auc=new_auc,
+                prod_auc=prod_auc,
+            )
+        else:
+            log.info(
+                "worker.retrain.kept_production",
+                investigation_id=investigation_id,
+                new_auc=new_auc,
+                prod_auc=prod_auc,
+            )
     except Exception:
         log.exception("worker.retrain.error", investigation_id=investigation_id)
         if ctx.get("job_try", 1) >= 3:

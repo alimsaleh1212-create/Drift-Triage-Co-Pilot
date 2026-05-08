@@ -1,4 +1,4 @@
-"""GET /drift/report — compute and cache drift report; emit webhook on severity change."""
+"""GET /drift/report — compute drift report; emit webhook on severity change."""
 
 from __future__ import annotations
 
@@ -184,6 +184,20 @@ async def _maybe_emit_severity_webhook(request: Request, report: DriftReport) ->
             severity=report.severity,
             previous=previous,
         )
+
+
+@router.post("/drift/reset")
+async def reset_drift(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Clear prediction rolling window and drift alert state for a clean demo run."""
+    await session.execute(text("DELETE FROM predictions"))
+    await session.execute(text("DELETE FROM drift_alert_state"))
+    await session.commit()
+    _drift_cache.clear()
+    log.info("drift.reset")
+    return {"status": "reset"}
 
 
 @router.get("/drift/report", response_model=DriftReport)

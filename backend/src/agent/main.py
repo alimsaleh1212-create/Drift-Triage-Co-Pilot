@@ -152,8 +152,10 @@ async def _create_investigation(
         await session.execute(
             text(
                 "INSERT INTO investigations "
-                "(id, drift_event_id, drift_report_id, status, summary_md, created_at, updated_at) "
-                "VALUES (:id, :event_id, :report_id, :status, :summary_md, now(), now())"
+                "(id, drift_event_id, drift_report_id, status, summary_md,"
+                " created_at, updated_at) "
+                "VALUES (:id, :event_id, :report_id, :status, :summary_md,"
+                " now(), now())"
             ),
             {
                 "id": investigation_id,
@@ -267,6 +269,90 @@ async def list_hil_approvals() -> list[dict[str, Any]]:
             )
         )
         return [dict(r._mapping) for r in result]
+
+
+@router.get("/queue/metrics")
+async def queue_metrics() -> dict[str, Any]:
+    """Return arq queue depth, DLQ size, dedup locks, and recent worker jobs."""
+    import json
+
+    import redis.asyncio as aioredis
+
+    from core.settings import get_settings
+
+    settings = get_settings()
+    # decode_responses=True for string keys; arq result values are msgpack (binary)
+    # so we use a separate bytes client to avoid UnicodeDecodeError on result scan.
+    redis_str = aioredis.from_url(settings.redis_url, decode_responses=True)
+    redis_bytes = aioredis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        queue_key = f"arq:queue:{settings.redis_queue_name}"
+        dlq_key = f"{settings.redis_queue_name}:dlq"
+        # arq queue is a sorted set — never call llen on it (WRONGTYPE)
+        queue_depth = await redis_str.zcard(queue_key)
+        dlq_count = await redis_str.llen(dlq_key)
+        active_dispatches = 0
+        async for _ in redis_str.scan_iter(match="dispatch:*", count=100):
+            active_dispatches += 1
+        result_keys = []
+        async for key in redis_bytes.scan_iter(match="arq:result:*", count=200):
+            result_keys.append(key)
+        recent_jobs: list[dict[str, Any]] = []
+        for key in result_keys[-20:]:
+            raw = await redis_bytes.get(key)
+            if not raw:
+                continue
+            key_str = key.decode("utf-8") if isinstance(key, bytes) else key
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = {"raw": f"binary ({len(raw)} bytes)"}
+            recent_jobs.append({"key": key_str, **parsed})
+        dlq_items: list[dict[str, Any]] = []
+        for raw in await redis_str.lrange(dlq_key, 0, 9):
+            try:
+                dlq_items.append(json.loads(raw))
+            except Exception:
+                dlq_items.append({"raw": raw})
+        # Detect in-progress arq jobs: worker publishes heartbeat at arq:health-check
+        # and marks running jobs at arq:{queue}:running (varies by version).
+        # We approximate via "dispatch lock exists but queue is empty" = worker running.
+        worker_running = bool(active_dispatches > 0 and queue_depth == 0)
+        return {
+            "queue_depth": int(queue_depth or 0),
+            "dlq_count": int(dlq_count or 0),
+            "active_dispatches": active_dispatches,
+            "worker_running": worker_running,
+            "recent_jobs_count": len(recent_jobs),
+            "recent_jobs": recent_jobs,
+            "dlq_items": dlq_items,
+        }
+    finally:
+        await redis_str.aclose()
+        await redis_bytes.aclose()
+
+
+@router.post("/admin/reset")
+async def admin_reset() -> dict[str, str]:
+    """Mark all open investigations resolved and clear pending HIL approvals."""
+    from sqlalchemy import text
+
+    async with get_session() as session:
+        await session.execute(
+            text(
+                "UPDATE investigations SET status = 'resolved',"
+                " updated_at = now() WHERE status != 'resolved'"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE hil_approvals SET status = 'rejected',"
+                " decision = 'rejected' WHERE status = 'pending'"
+            )
+        )
+        await session.commit()
+    log.info("admin.reset")
+    return {"status": "reset"}
 
 
 @router.get("/investigations")

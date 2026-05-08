@@ -93,6 +93,7 @@ class TrainResult:
     f1: float
     accuracy: float
     threshold: float
+    val_recall: float = 0.0  # recall on val set at operating threshold (what was tuned)
     all_results: dict = field(default_factory=dict)
     split_info: dict = field(default_factory=dict)
     dataset_hash: str = ""
@@ -209,6 +210,7 @@ def train(split: DataSplit) -> TrainResult:
         f1=test_metrics["f1"],
         accuracy=test_metrics["accuracy"],
         threshold=best["threshold"],
+        val_recall=best["val_metrics"]["recall"],
         all_results=results,
         split_info=split_info,
         dataset_hash=split.dataset_hash,

@@ -13,7 +13,7 @@ from core.logging import configure_logging, get_logger
 from core.settings import get_settings
 from ml.reference_stats import load_reference_stats
 from ml.register import MODEL_NAME, load_model
-from service.routers import drift, prediction, promotion
+from service.routers import drift, prediction, promotion, registry
 
 log = get_logger(__name__)
 
@@ -64,6 +64,7 @@ app = FastAPI(
 app.include_router(prediction.router, prefix="/api/v1", tags=["prediction"])
 app.include_router(drift.router, prefix="/api/v1", tags=["drift"])
 app.include_router(promotion.router, prefix="/api/v1", tags=["promotion"])
+app.include_router(registry.router, prefix="/api/v1", tags=["registry"])
 
 
 @app.get("/health", tags=["health"])

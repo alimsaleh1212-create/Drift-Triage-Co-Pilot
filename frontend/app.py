@@ -13,7 +13,6 @@ from typing import Any
 
 import httpx
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh  # type: ignore[import-untyped]
 
 SERVICE_URL = os.getenv("SERVICE_URL", "http://service:8000").rstrip("/")
 AGENT_URL = os.getenv("AGENT_URL", "http://agent:8001").rstrip("/")
@@ -71,7 +70,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-st_autorefresh(interval=15000, key="auto_refresh")
 
 
 @dataclass
@@ -112,7 +110,9 @@ def api_post(
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=payload, headers=headers or {})
             response.raise_for_status()
-            return ApiResult(ok=True, data=response.json(), status_code=response.status_code)
+            return ApiResult(
+                ok=True, data=response.json(), status_code=response.status_code
+            )
     except httpx.HTTPStatusError as exc:
         return ApiResult(
             ok=False,
@@ -223,7 +223,13 @@ def prediction_payload(row: dict[str, str]) -> dict[str, Any]:
             raise ValueError(f"Missing prediction field: {field}")
         if field in INTEGER_FIELDS:
             payload[field] = int(float(row[field]))
-        elif field in {"emp.var.rate", "cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed"}:
+        elif field in {
+            "emp.var.rate",
+            "cons.price.idx",
+            "cons.conf.idx",
+            "euribor3m",
+            "nr.employed",
+        }:
             payload[field] = float(row[field])
         else:
             payload[field] = str(row[field])
@@ -234,16 +240,26 @@ def force_drift_report() -> ApiResult:
     return api_get(f"{SERVICE_URL}/api/v1/drift/report?force=true", timeout=30.0)
 
 
+def reset_drift_window() -> ApiResult:
+    return api_post(f"{SERVICE_URL}/api/v1/drift/reset", {}, timeout=10.0)
+
+
 def top_drift_features(report: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for result in report.get("psi_results") or []:
+        psi = float(result.get("psi") or 0)
         items.append(
             {
                 "feature": result.get("feature"),
                 "type": "PSI",
-                "value": result.get("psi", 0),
+                "value": round(psi, 4),
                 "severity": result.get("severity", "unknown"),
-                "sort_value": float(result.get("psi") or 0),
+                "_sort": (
+                    {"high": 3, "medium": 2, "low": 1}.get(
+                        str(result.get("severity")), 0
+                    ),
+                    psi,
+                ),
             }
         )
     for result in report.get("chi2_results") or []:
@@ -252,17 +268,18 @@ def top_drift_features(report: dict[str, Any], limit: int = 3) -> list[dict[str,
             {
                 "feature": result.get("feature"),
                 "type": "Chi-square",
-                "value": p_value,
+                "value": round(p_value, 6),
                 "severity": result.get("severity", "unknown"),
-                "sort_value": 1 - p_value,
+                "_sort": (
+                    {"high": 3, "medium": 2, "low": 1}.get(
+                        str(result.get("severity")), 0
+                    ),
+                    1 - p_value,
+                ),
             }
         )
-    severity_rank = {"high": 3, "medium": 2, "low": 1}
-    return sorted(
-        items,
-        key=lambda item: (severity_rank.get(str(item["severity"]), 0), item["sort_value"]),
-        reverse=True,
-    )[:limit]
+    sorted_items = sorted(items, key=lambda x: x["_sort"], reverse=True)[:limit]
+    return [{k: v for k, v in item.items() if k != "_sort"} for item in sorted_items]
 
 
 def inject_demo_batch(scenario: str, max_rows: int | None = None) -> dict[str, Any]:
@@ -296,10 +313,16 @@ def inject_demo_batch(scenario: str, max_rows: int | None = None) -> dict[str, A
                 error_examples.append({"row": index, "error": str(exc)})
 
         if index == len(rows) or index % 25 == 0:
-            progress.progress(index / max(len(rows), 1), text=f"Sent {index}/{len(rows)} rows")
+            progress.progress(
+                index / max(len(rows), 1), text=f"Sent {index}/{len(rows)} rows"
+            )
 
     progress.empty()
-    report_result = force_drift_report() if success_count else ApiResult(ok=False, error="No successful predictions")
+    report_result = (
+        force_drift_report()
+        if success_count
+        else ApiResult(ok=False, error="No successful predictions")
+    )
     report = report_result.data if report_result.ok else {}
     return {
         "scenario": scenario,
@@ -333,9 +356,13 @@ def model_artifact_summary() -> dict[str, Any]:
     threshold = json_file(reports_dir / "operating_threshold.json") or {}
     training = json_file(reports_dir / "training_report.json") or {}
     return {
-        "registered_model_name": threshold.get("registered_model_name", "drift-triage-classifier"),
-        "selected_model": threshold.get("selected_model") or training.get("selected_model"),
-        "operating_threshold": threshold.get("operating_threshold") or training.get("selected_threshold"),
+        "registered_model_name": threshold.get(
+            "registered_model_name", "drift-triage-classifier"
+        ),
+        "selected_model": threshold.get("selected_model")
+        or training.get("selected_model"),
+        "operating_threshold": threshold.get("operating_threshold")
+        or training.get("selected_threshold"),
         "created_at": threshold.get("created_at") or training.get("created_at"),
         "test_metrics": training.get("test_metrics") or {},
     }
@@ -352,8 +379,14 @@ st.markdown(
         background: #ffffff;
         min-height: 126px;
     }
-    .card-title {font-size: 0.78rem; color: #64748b; text-transform: uppercase; letter-spacing: 0;}
-    .card-value {font-size: 1.15rem; font-weight: 650; color: #0f172a; margin: 0.25rem 0 0.45rem;}
+    .card-title {
+        font-size: 0.78rem; color: #64748b;
+        text-transform: uppercase; letter-spacing: 0;
+    }
+    .card-value {
+        font-size: 1.15rem; font-weight: 650;
+        color: #0f172a; margin: 0.25rem 0 0.45rem;
+    }
     .card-help {font-size: 0.82rem; color: #64748b; margin-top: 0.4rem;}
     .badge {
         border: 1px solid;
@@ -377,7 +410,11 @@ if "last_batch_result" not in st.session_state:
 service_health = api_get(f"{SERVICE_URL}/health")
 agent_health = api_get(f"{AGENT_URL}/health")
 mlflow_health = api_get(f"{MLFLOW_URL}/health")
-drift_result = force_drift_report() if service_health.ok else ApiResult(ok=False, error="Service unavailable")
+drift_result = (
+    force_drift_report()
+    if service_health.ok
+    else ApiResult(ok=False, error="Service unavailable")
+)
 drift_report = drift_result.data if drift_result.ok else {}
 model_summary = model_artifact_summary()
 
@@ -410,7 +447,11 @@ with health_cols[3]:
         "Current Model",
         model_summary.get("registered_model_name", "Not available"),
         "healthy" if service_health.ok else "warning",
-        f"Threshold {threshold:.3f}" if isinstance(threshold, (int, float)) else "Model/MLflow unavailable - train or start MLflow before prediction demo.",
+        (
+            f"Threshold {threshold:.3f}"
+            if isinstance(threshold, (int, float))
+            else "Model/MLflow unavailable — train or start MLflow first."
+        ),
     )
 with health_cols[4]:
     severity = drift_report.get("severity", "not available")
@@ -422,9 +463,14 @@ with health_cols[4]:
     )
 
 if not service_health.ok:
-    st.warning("Model/MLflow unavailable - train or start MLflow before prediction demo.")
+    st.warning(
+        "Model/MLflow unavailable - train or start MLflow before prediction demo."
+    )
 if not agent_health.ok:
-    st.warning("Agent is unavailable. Batch prediction and drift viewing may still work, but investigations and HIL approval will not update.")
+    st.warning(
+        "Agent is unavailable. Batch prediction and drift viewing may still work,"
+        " but investigations and HIL approval will not update."
+    )
 
 st.divider()
 st.subheader("Demo Batch Launcher")
@@ -432,23 +478,63 @@ batch_dir = demo_batch_dir()
 if batch_dir:
     st.caption(f"Demo batches: {batch_dir}")
 else:
-    st.warning("Demo batch directory not available. Expected data/demo_batches with generated CSV files.")
+    st.warning(
+        "Demo batch directory not available. "
+        "Expected data/demo_batches with generated CSV files."
+    )
 
-button_cols = st.columns(4)
+batch_row_count = st.number_input(
+    "Rows to inject",
+    min_value=50,
+    max_value=10000,
+    value=200,
+    step=50,
+    help="How many rows from the batch CSV to send through the prediction API.",
+)
+
+button_cols = st.columns(5)
 for index, (scenario, info) in enumerate(SCENARIOS.items()):
     with button_cols[index]:
         available = batch_path(scenario) is not None and service_health.ok
-        if st.button(info["button"], key=f"send_{scenario}", disabled=not available, use_container_width=True):
+        if st.button(
+            info["button"],
+            key=f"send_{scenario}",
+            disabled=not available,
+            use_container_width=True,
+        ):
             with st.spinner(f"Sending {scenario} through the prediction API..."):
                 try:
-                    st.session_state.last_batch_result = inject_demo_batch(scenario)
+                    st.session_state.last_batch_result = inject_demo_batch(
+                        scenario, max_rows=int(batch_row_count)
+                    )
                     st.success("Batch sent. Drift report refreshed.")
+                    st.rerun()
                 except Exception as exc:
                     st.session_state.last_batch_result = {
                         "scenario": scenario,
                         "errors": [{"row": "setup", "error": str(exc)}],
                     }
                     st.error(str(exc))
+with button_cols[4]:
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    if st.button(
+        "Reset Demo",
+        key="reset_demo",
+        use_container_width=True,
+        type="secondary",
+        disabled=not service_health.ok,
+    ):
+        r1 = reset_drift_window()
+        r2 = api_post(f"{AGENT_URL}/admin/reset", {}, timeout=10.0)
+        if r1.ok and r2.ok:
+            st.session_state.last_batch_result = None
+            st.success(
+                "Reset complete. Send Normal Batch → then a drift batch "
+                "to trigger a fresh investigation."
+            )
+            st.rerun()
+        else:
+            st.error(f"Reset errors: service={r1.error}, agent={r2.error}")
 
 if st.session_state.last_batch_result:
     result = st.session_state.last_batch_result
@@ -461,7 +547,9 @@ if st.session_state.last_batch_result:
     metrics[4].metric("Expected Action", result.get("expected_action", "n/a"))
     metrics[5].metric("Drift Severity", result.get("drift_severity", "n/a"))
     if result.get("top_drifted_features"):
-        st.dataframe(result["top_drifted_features"], use_container_width=True, hide_index=True)
+        st.dataframe(
+            result["top_drifted_features"], use_container_width=True, hide_index=True
+        )
     if result.get("drift_error"):
         st.error(f"Drift report failed: {result['drift_error']}")
     if result.get("errors"):
@@ -469,82 +557,53 @@ if st.session_state.last_batch_result:
             st.json(result["errors"])
 
 st.divider()
-left, right = st.columns([2, 1])
-with left:
-    st.subheader("Latest Drift Report")
-with right:
-    if st.button("Refresh Drift Report", use_container_width=True):
-        drift_result = force_drift_report()
-        drift_report = drift_result.data if drift_result.ok else {}
-
-if not drift_result.ok:
-    st.error(f"Could not load drift report: {drift_result.error}")
-else:
-    summary_cols = st.columns(4)
-    summary_cols[0].metric("Severity", str(drift_report.get("severity", "unknown")).title())
-    summary_cols[1].metric("Window Size", drift_report.get("window_size", 0))
-    output = drift_report.get("output_drift") or {}
-    summary_cols[2].metric("Output PSI", f"{float(output.get('psi', 0)):.4f}")
-    summary_cols[3].metric("Current Class 1 Rate", f"{float(output.get('current_class_1_rate', 0)):.3f}")
-
-    top_features = top_drift_features(drift_report)
-    if top_features:
-        st.markdown("**Top 3 Drifted Features**")
-        st.dataframe(top_features, use_container_width=True, hide_index=True)
-
-    drift_cols = st.columns(2)
-    with drift_cols[0]:
-        st.markdown("**PSI Summary - Numeric Features**")
-        psi_rows = [
-            {
-                "feature": item.get("feature"),
-                "psi": round(float(item.get("psi") or 0), 4),
-                "severity": item.get("severity"),
-            }
-            for item in drift_report.get("psi_results") or []
-        ]
-        st.dataframe(psi_rows, use_container_width=True, hide_index=True) if psi_rows else st.info("No numeric feature drift yet.")
-    with drift_cols[1]:
-        st.markdown("**Chi-square Summary - Categorical Features**")
-        chi_rows = [
-            {
-                "feature": item.get("feature"),
-                "p_value": f"{float(item.get('p_value') or 1):.4g}",
-                "severity": item.get("severity"),
-            }
-            for item in drift_report.get("chi2_results") or []
-        ]
-        st.dataframe(chi_rows, use_container_width=True, hide_index=True) if chi_rows else st.info("No categorical feature drift yet.")
-
-    with st.expander("Raw drift report JSON"):
-        st.json(drift_report)
-
-st.divider()
-st.subheader("Agent Investigations")
+inv_left, inv_right = st.columns([3, 1])
+with inv_left:
+    st.subheader("Agent Investigations")
+with inv_right:
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    if st.button("Refresh Investigations", use_container_width=True, key="refresh_inv"):
+        st.rerun()
 investigations_result = api_get(f"{AGENT_URL}/investigations")
 investigations = investigations_result.data if investigations_result.ok else []
 if not investigations_result.ok:
     st.error(f"Could not load investigations: {investigations_result.error}")
 elif not investigations:
-    st.info("No investigations yet. Send a drifted batch and refresh the drift report to trigger the agent.")
+    st.info("No investigations yet. Send a drifted batch to trigger the agent.")
 else:
     open_items = [item for item in investigations if item.get("status") != "resolved"]
-    resolved_items = [item for item in investigations if item.get("status") == "resolved"]
+    resolved_items = [
+        item for item in investigations if item.get("status") == "resolved"
+    ]
     tabs = st.tabs([f"Open ({len(open_items)})", f"Resolved ({len(resolved_items)})"])
     for tab, items in zip(tabs, [open_items, resolved_items], strict=True):
         with tab:
             for item in items:
                 summary = item.get("summary_md") or ""
-                with st.expander(f"{item.get('id', '')[:8]} - {item.get('status', 'unknown')}"):
+                severity = extract_field(summary, "severity")
+                action = extract_field(summary, "action")
+                label = f"{item.get('id', '')[:8]} · {severity} · {action}"
+                with st.expander(label):
                     inv_cols = st.columns(4)
-                    inv_cols[0].write(f"**Severity**: {extract_field(summary, 'severity')}")
-                    inv_cols[1].write(f"**Model**: {extract_field(summary, 'model_name')} v{extract_field(summary, 'model_version')}")
-                    inv_cols[2].write(f"**Action**: {extract_field(summary, 'action')}")
-                    inv_cols[3].write(f"**Updated**: {format_time(item.get('updated_at'))}")
+                    inv_cols[0].write(f"**Severity**: {severity}")
+                    inv_cols[1].write(
+                        f"**Model**: {extract_field(summary, 'model_name')}"
+                        f" v{extract_field(summary, 'model_version')}"
+                    )
+                    inv_cols[2].write(f"**Action**: {action}")
+                    inv_cols[3].write(
+                        f"**Updated**: {format_time(item.get('updated_at'))}"
+                    )
                     st.write(summary or "No summary available yet.")
 
 st.divider()
-st.subheader("Human Approval Inbox")
+hil_left, hil_right = st.columns([3, 1])
+with hil_left:
+    st.subheader("Human Approval Inbox")
+with hil_right:
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    if st.button("Refresh HIL", use_container_width=True, key="refresh_hil"):
+        st.rerun()
 approvals_result = api_get(f"{AGENT_URL}/hil/approvals")
 approvals = approvals_result.data if approvals_result.ok else []
 if not approvals_result.ok:
@@ -561,25 +620,43 @@ else:
             cols[0].write(f"**Related investigation**: `{str(investigation_id)[:8]}`")
             cols[1].write(f"**Model version**: {approval.get('model_version', 'n/a')}")
             cols[2].write(f"**Created**: {format_time(approval.get('created_at'))}")
-            st.write(f"**Reason**: {approval.get('rationale') or approval.get('summary_md') or 'Not available'}")
-            st.write("**Risk / impact**: This action may enqueue worker activity that touches replay, retraining, or production model state.")
+            reason = (
+                approval.get("rationale")
+                or approval.get("summary_md")
+                or "Not available"
+            )
+            st.write(f"**Reason**: {reason}")
+            st.write(
+                "**Risk / impact**: This action may enqueue worker activity "
+                "that touches replay, retraining, or production model state."
+            )
             approve_col, reject_col, _ = st.columns([1, 1, 4])
             with approve_col:
-                if st.button("Approve", key=f"approve_{approval_id}", use_container_width=True):
-                    result = api_post(
-                        f"{AGENT_URL}/hil/approve",
-                        {
-                            "investigation_id": investigation_id,
-                            "hil_approval_id": approval_id,
-                            "decision": "approved",
-                        },
-                        timeout=30.0,
+                if st.button(
+                    "Approve", key=f"approve_{approval_id}", use_container_width=True
+                ):
+                    with st.spinner("Sending approval to agent..."):
+                        result = api_post(
+                            f"{AGENT_URL}/hil/approve",
+                            {
+                                "investigation_id": investigation_id,
+                                "hil_approval_id": approval_id,
+                                "decision": "approved",
+                            },
+                            timeout=30.0,
+                        )
+                    if not result.ok:
+                        st.error(result.error)
+                        st.stop()
+                    st.success(
+                        "HIL approved — worker has picked up the retrain job. "
+                        "Refresh Queue / Registry to track progress."
                     )
-                    st.success("Approved. Agent resumed.") if result.ok else st.error(result.error)
-                    time.sleep(0.5)
                     st.rerun()
             with reject_col:
-                if st.button("Reject", key=f"reject_{approval_id}", use_container_width=True):
+                if st.button(
+                    "Reject", key=f"reject_{approval_id}", use_container_width=True
+                ):
                     result = api_post(
                         f"{AGENT_URL}/hil/approve",
                         {
@@ -594,37 +671,114 @@ else:
                     st.rerun()
 
 st.divider()
-st.subheader("Queue / Worker")
-st.info("Queue metrics endpoint not implemented yet. Check worker logs with docker compose logs worker.")
-queue_cols = st.columns(3)
-queue_cols[0].metric("Queue Depth", "Not available")
-queue_cols[1].metric("DLQ Count", "Not available")
-queue_cols[2].metric("Recent Worker Logs", "Use compose logs")
+qw_left, qw_right = st.columns([3, 1])
+with qw_left:
+    st.subheader("Queue / Worker")
+with qw_right:
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    if st.button("Refresh Queue", use_container_width=True, key="refresh_queue"):
+        st.rerun()
+queue_metrics_result = api_get(f"{AGENT_URL}/queue/metrics")
+if queue_metrics_result.ok:
+    metrics_data = queue_metrics_result.data or {}
+    depth = metrics_data.get("queue_depth", 0)
+    dispatches = metrics_data.get("active_dispatches", 0)
+    worker_running = metrics_data.get("worker_running", False)
+    queue_cols = st.columns(4)
+    queue_cols[0].metric("Queue Depth", depth)
+    queue_cols[1].metric("DLQ Count", metrics_data.get("dlq_count", 0))
+    queue_cols[2].metric("Active Dispatches", dispatches)
+    queue_cols[3].metric("Completed Jobs", metrics_data.get("recent_jobs_count", 0))
+    if depth > 0:
+        st.info(
+            f"Job waiting in queue (depth={depth}). Worker will pick it up shortly."
+        )
+    elif worker_running:
+        st.warning(
+            "Worker is processing a job (dispatch lock active, queue empty). "
+            "Retrain may take several minutes — click Refresh Queue to update."
+        )
+    dlq_items = metrics_data.get("dlq_items") or []
+    if dlq_items:
+        with st.expander(f"Dead-letter queue ({len(dlq_items)} items)", expanded=True):
+            for item in dlq_items:
+                st.error(
+                    f"DLQ: {item.get('job_type', 'unknown')} — "
+                    f"{item.get('payload', {})}"
+                )
+else:
+    st.warning(f"Queue metrics unavailable: {queue_metrics_result.error}")
+    st.caption("Check worker logs with `docker compose logs worker`.")
 
 st.divider()
-st.subheader("Registry / Model")
-if model_summary:
-    model_cols = st.columns(5)
-    model_cols[0].metric("Registered Model", model_summary.get("registered_model_name", "Not available"))
-    model_cols[1].metric("Selected Model", model_summary.get("selected_model", "Not available"))
-    threshold = model_summary.get("operating_threshold")
-    model_cols[2].metric("Operating Threshold", f"{threshold:.3f}" if isinstance(threshold, (int, float)) else "Not available")
-    model_cols[3].metric("Stage", "Production/Staging via MLflow")
-    model_cols[4].markdown(f"[Open MLflow UI]({MLFLOW_PUBLIC_URL})")
-    metrics = model_summary.get("test_metrics") or {}
-    st.dataframe(
-        [
-            {"metric": "test_auc", "value": metrics.get("auc")},
-            {"metric": "test_f1", "value": metrics.get("f1")},
-            {"metric": "test_recall", "value": metrics.get("recall")},
-            {"metric": "test_precision", "value": metrics.get("precision")},
-            {"metric": "test_accuracy", "value": metrics.get("accuracy")},
-        ],
-        use_container_width=True,
-        hide_index=True,
+reg_left, reg_right = st.columns([3, 1])
+with reg_left:
+    st.subheader("Registry / Model")
+with reg_right:
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    if st.button("Refresh Registry", use_container_width=True, key="refresh_registry"):
+        st.rerun()
+
+registry_result = api_get(f"{SERVICE_URL}/api/v1/models/registry", timeout=5.0)
+if registry_result.ok:
+    reg_data = registry_result.data or {}
+    prod = reg_data.get("production")
+    staging = reg_data.get("staging")
+    prod_col, staging_col = st.columns(2)
+
+    with prod_col:
+        st.markdown("**Production**")
+        if prod:
+            st.metric("Version", f"v{prod['version']}")
+            st.metric("AUC", f"{prod['auc']:.4f}" if prod["auc"] else "n/a")
+            st.metric(
+                "Recall (val)", f"{prod['recall']:.4f}" if prod["recall"] else "n/a"
+            )
+            st.metric(
+                "Threshold", f"{prod['threshold']:.4f}" if prod["threshold"] else "n/a"
+            )
+        else:
+            st.info("No Production model.")
+
+    with staging_col:
+        st.markdown("**Staging**")
+        if staging:
+            st.metric("Version", f"v{staging['version']}")
+            st.metric("AUC", f"{staging['auc']:.4f}" if staging["auc"] else "n/a")
+            st.metric(
+                "Recall (val)",
+                f"{staging['recall']:.4f}" if staging["recall"] else "n/a",
+            )
+            st.metric(
+                "Threshold",
+                f"{staging['threshold']:.4f}" if staging["threshold"] else "n/a",
+            )
+            # Eligibility badge
+            recall_ok = staging["recall"] >= 0.75
+            auc_ok = (not prod) or (staging["auc"] >= prod["auc"])
+            if recall_ok and auc_ok:
+                st.success("✓ Eligible for promotion")
+            elif not recall_ok:
+                st.error(
+                    f"✗ Below recall gate "
+                    f"({staging['recall']:.4f} < 0.75) — retrying → DLQ"
+                )
+            else:
+                prod_auc = prod["auc"] if prod else 0.0
+                st.warning(
+                    f"⚠ AUC regression "
+                    f"({staging['auc']:.4f} < prod {prod_auc:.4f})"
+                    " — keeping Production"
+                )
+        else:
+            st.info("No Staging model.")
+
+    st.caption(
+        f"Model: {reg_data.get('model_name', 'unknown')} · "
+        f"[Open MLflow UI]({MLFLOW_PUBLIC_URL})"
     )
 else:
-    st.warning("Model/MLflow unavailable - train or start MLflow before prediction demo.")
+    st.warning(f"Registry unavailable: {registry_result.error}")
     st.markdown(f"[Open MLflow UI]({MLFLOW_PUBLIC_URL})")
 
 with st.expander("Presentation Demo Steps", expanded=False):

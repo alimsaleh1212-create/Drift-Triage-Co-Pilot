@@ -13,11 +13,13 @@ CREATE INDEX IF NOT EXISTS predictions_created_at_idx ON predictions (created_at
 
 -- Investigation state (agent checkpoints live in langgraph's own tables)
 CREATE TABLE IF NOT EXISTS investigations (
-    id          TEXT PRIMARY KEY,
-    status      TEXT NOT NULL DEFAULT 'open',
-    summary_md  TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               TEXT PRIMARY KEY,
+    drift_event_id   TEXT,
+    drift_report_id  TEXT,
+    status           TEXT NOT NULL DEFAULT 'open',
+    summary_md       TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- HIL approval requests

@@ -30,7 +30,7 @@ log = get_logger(__name__)
 
 # Tool registry — allowlist enforced here; unknown tool names are rejected
 TOOL_REGISTRY: dict[str, Any] = {
-    t.name: t
+    t.name: t  # type: ignore[attr-defined]
     for t in [
         InspectDrift(),
         ProposeAction(),
@@ -117,9 +117,10 @@ def route_from_supervisor(state: AgentState) -> NextStep:
 
 async def triage_agent_node(state: AgentState) -> AgentState:
     """Fetch drift report and run the triage sub-agent analysis."""
+    from pydantic import BaseModel
+
     from agent.llm import call_llm
     from agent.security import delimit_external
-    from pydantic import BaseModel
 
     class TriageOutput(BaseModel):
         drifted_features: list[str]
@@ -139,9 +140,7 @@ async def triage_agent_node(state: AgentState) -> AgentState:
     import importlib.resources
 
     system_prompt = (
-        importlib.resources.files("agent.prompts")
-        .joinpath("triage.md")
-        .read_text()
+        importlib.resources.files("agent.prompts").joinpath("triage.md").read_text()
     )
     user_prompt = (
         f"{system_prompt}\n\n"
@@ -158,11 +157,14 @@ async def triage_agent_node(state: AgentState) -> AgentState:
                 for item in report_dict.get("psi_results", [])
                 if item.get("severity") in ("medium", "high")
             ][:5],
-            severity=state["alert"].get("severity", report_dict.get("severity", "unknown")),
+            severity=state["alert"].get(
+                "severity", report_dict.get("severity", "unknown")
+            ),
             hypothesis=(
                 "High drift detected in recent production data. "
-                "The strongest signals are macroeconomic and categorical feature shifts. "
-                "A retraining investigation is recommended before any production-changing action."
+                "The strongest signals are macroeconomic and categorical "
+                "feature shifts. A retraining investigation is recommended "
+                "before any production-changing action."
             ),
             should_act=state["alert"].get("severity") in ("medium", "high"),
         )
@@ -253,10 +255,24 @@ async def pause_for_human_node(state: AgentState) -> AgentState:
             **state,
             "awaiting_approval": False,
             "status": "resolved",
-            "summary_md": "HIL approval is missing, rejected, or does not match the proposal.",
+            "summary_md": (
+                "HIL approval is missing, rejected, or does not match the proposal."
+            ),
         }
 
     return {**state, "awaiting_approval": False, "status": "open"}
+
+
+def _build_metadata_prefix(state: AgentState) -> str:
+    """Return key=value metadata the dashboard's extract_field regex can parse."""
+    alert = state.get("alert") or {}
+    return (
+        f"severity={alert.get('severity', 'unknown')}, "
+        f"model_name={alert.get('model_name', 'unknown')}, "
+        f"model_version={alert.get('model_version', 'unknown')}, "
+        f"action={state.get('proposed_action') or 'no_action'}, "
+        f"dispatch={state.get('dispatch_status') or 'pending'}\n\n"
+    )
 
 
 async def comms_agent_node(state: AgentState) -> AgentState:
@@ -274,7 +290,17 @@ async def comms_agent_node(state: AgentState) -> AgentState:
             "triage_notes": state.get("triage_notes") or "",
         }
     )
-    summary_md = result.result.summary_md if result.ok else "Summary generation failed."  # type: ignore[union-attr]
+    if result.ok:
+        body = result.result.summary_md  # type: ignore[union-attr]
+    else:
+        log.warning("comms.compose_failed_using_fallback", error=result.error)
+        body = (
+            f"**Triage notes**: {state.get('triage_notes') or 'N/A'}\n\n"
+            "_LLM summary generation was unavailable; "
+            "this is a system-generated summary._"
+        )
+
+    summary_md = _build_metadata_prefix(state) + body
 
     update_tool = TOOL_REGISTRY["update_dashboard"]
     await update_tool.safe_run(
@@ -290,9 +316,10 @@ async def comms_agent_node(state: AgentState) -> AgentState:
 async def dispatch_node(state: AgentState) -> AgentState:
     """Validate approval/freshness, then enqueue the action to the arq worker."""
     proposed_action = state.get("proposed_action")
-    if (
-        state.get("awaiting_approval")
-        or proposed_action not in ("replay_test", "retrain", "rollback")
+    if state.get("awaiting_approval") or proposed_action not in (
+        "replay_test",
+        "retrain",
+        "rollback",
     ):
         return state
 
@@ -322,7 +349,9 @@ async def dispatch_node(state: AgentState) -> AgentState:
             **state,
             "dispatch_status": "blocked",
             "status": "resolved",
-            "summary_md": f"Dispatch blocked because model version reconciliation failed: {exc}",
+            "summary_md": (
+                f"Dispatch blocked because model version reconciliation failed: {exc}"
+            ),
         }
 
     dispatch_tool = TOOL_REGISTRY["dispatch_action"]
@@ -419,6 +448,7 @@ async def _freshness_error(state: AgentState) -> str | None:
 
     return None
 
+
 async def _reconciled_model_version(state: AgentState) -> int:
     """Return a model version that still resolves after checkpoint resume."""
     from agent.reconcile import reconcile_model_uri
@@ -469,4 +499,6 @@ def build_graph(checkpointer: Any) -> Any:
     graph.add_edge("dispatch", "supervisor")
     graph.add_edge("comms_agent", "supervisor")
 
-    return graph.compile(checkpointer=checkpointer, interrupt_before=["pause_for_human"])
+    return graph.compile(
+        checkpointer=checkpointer, interrupt_before=["pause_for_human"]
+    )

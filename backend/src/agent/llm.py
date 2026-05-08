@@ -31,7 +31,7 @@ log = get_logger(__name__)
 
 M = TypeVar("M", bound=BaseModel)
 
-_MAX_OUTPUT_TOKENS = 2048
+_MAX_OUTPUT_TOKENS = 4096
 
 
 @lru_cache(maxsize=1)

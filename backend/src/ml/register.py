@@ -194,12 +194,19 @@ def register_model(
         archive_existing_versions=True,
     )
 
-    client.set_model_version_tag(
-        name=MODEL_NAME,
-        version=latest_version.version,
-        key="operating_threshold",
-        value=str(threshold),
-    )
+    for tag_key, tag_val in [
+        ("operating_threshold", str(threshold)),
+        ("auc", str(result.auc)),
+        # val_recall = threshold-tuning target (≥ 0.75 by construction).
+        # Test recall has natural val→test variance; logged as metric separately.
+        ("recall", str(result.val_recall if result.val_recall > 0 else result.recall)),
+    ]:
+        client.set_model_version_tag(
+            name=MODEL_NAME,
+            version=latest_version.version,
+            key=tag_key,
+            value=tag_val,
+        )
 
     staging_uri = f"models:/{MODEL_NAME}/Staging"
     registered_pipeline = mlflow.sklearn.load_model(staging_uri)

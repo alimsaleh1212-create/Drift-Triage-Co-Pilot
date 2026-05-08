@@ -27,6 +27,7 @@ services:
   worker:
     volumes:
       - ./backend/src:/app/src
+      - ./backend/artifacts:/app/artifacts
     environment:
       PYTHONPATH: /app/src
     command: ["uv", "run", "--no-dev", "arq", "worker.main.WorkerSettings"]

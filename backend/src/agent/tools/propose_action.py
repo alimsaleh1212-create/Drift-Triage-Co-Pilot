@@ -39,10 +39,15 @@ class ProposeAction(BaseTool[ProposeActionInput, ProposeActionOutput]):
                 requires_hil=False,
                 priority="low",
             )
-        action = "retrain" if args.severity == "high" else "replay_test"
+        action: Literal["retrain", "replay_test"] = (
+            "retrain" if args.severity == "high" else "replay_test"
+        )
         return ProposeActionOutput(
             action=action,
-            rationale=f"Severity={args.severity}. Features drifted: {args.drifted_features}.",
+            rationale=(
+                f"Severity={args.severity}. "
+                f"Features drifted: {args.drifted_features}."
+            ),
             requires_hil=True,  # all Production-touching actions require HIL
             priority=args.severity,
         )
